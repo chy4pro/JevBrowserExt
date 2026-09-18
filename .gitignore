@@ -1,0 +1,10 @@
+node_modules
+dist
+_ref_jev_ultrafast
+.DS_Store
+*.log
+.env
+.env.*
+*.pem
+*.key
+credentials.json
