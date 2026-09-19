@@ -135,3 +135,25 @@ describe('Text Helper (TYPE_TEXT value generator)', () => {
     });
   });
 });
+
+describe('describeHelperKey', () => {
+  it('explains where the key comes from, or exactly what is missing', async () => {
+    const { describeHelperKey } = await import('../src/shared/text-helper');
+    const base = { ...DEFAULT_SETTINGS, openrouter: { ...DEFAULT_SETTINGS.openrouter, apiKey: 'sk-or' } };
+    expect(describeHelperKey(base).source).toBe('openrouter');
+    expect(describeHelperKey({ ...base, textHelper: { ...base.textHelper, apiKey: 'own' } }).source).toBe('helper');
+    const deepseek = describeHelperKey({ ...base, textHelper: { provider: 'deepseek', apiKey: '', baseUrl: '', model: '' } });
+    expect(deepseek.source).toBeNull();
+    expect(deepseek.message).toMatch(/set to "deepseek".*api\.deepseek\.com.*only shared for OpenRouter/);
+    const noKeys = describeHelperKey(DEFAULT_SETTINGS);
+    expect(noKeys.source).toBeNull();
+    expect(noKeys.message).toMatch(/Enter an OpenRouter key/);
+  });
+
+  it('puts the same explanation into the TYPE_TEXT error', async () => {
+    const settings: AppSettings = { ...DEFAULT_SETTINGS, textHelper: { provider: 'openai', apiKey: '', baseUrl: '', model: '' } };
+    await expect(
+      generateFieldText(settings, { goal: 'g', field: {}, page: { title: '', text: '' }, recent_actions: [] })
+    ).rejects.toThrow(/set to "openai".*api\.openai\.com.*only shared for OpenRouter/);
+  });
+});

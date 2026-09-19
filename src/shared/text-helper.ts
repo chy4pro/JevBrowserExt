@@ -40,6 +40,32 @@ export function createFieldContext(
 
 const MAX_TEXT_LENGTH = 2000;
 
+export interface HelperKeyStatus {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  /** Where the key comes from, or null when none is available. */
+  source: 'helper' | 'openrouter' | null;
+  message: string;
+}
+
+/** Explains which key the text helper will use for the current settings, before any request is made. */
+export function describeHelperKey(settings: AppSettings): HelperKeyStatus {
+  const cfg = settings.textHelper;
+  const preset = TEXT_HELPER_PRESETS[cfg.provider] || TEXT_HELPER_PRESETS.openrouter;
+  const baseUrl = ((cfg.baseUrl || '').trim() || preset.baseUrl).replace(/\/+$/, '');
+  const model = (cfg.model || '').trim() || preset.model;
+  const own = (cfg.apiKey || '').trim();
+  const openrouterKey = (settings.openrouter.apiKey || '').trim();
+  const viaOpenRouter = baseUrl.includes('openrouter.ai');
+  if (own) return { provider: cfg.provider, baseUrl, model, source: 'helper', message: `Text helper uses its own key for ${model} at ${baseUrl}.` };
+  if (viaOpenRouter && openrouterKey) return { provider: cfg.provider, baseUrl, model, source: 'openrouter', message: `Text helper reuses the OpenRouter key for ${model}.` };
+  const hint = viaOpenRouter
+    ? 'Enter an OpenRouter key in the Jev provider section or in the Text helper section.'
+    : `The text helper is set to "${cfg.provider}" (${baseUrl}); the OpenRouter key is only shared for OpenRouter. Enter a key for that provider, or switch the helper provider back to OpenRouter (Reset to defaults does this).`;
+  return { provider: cfg.provider, baseUrl, model, source: null, message: `No API key for the text helper. ${hint}` };
+}
+
 /**
  * Asks the small text model for exactly one field value. Any malformed or empty answer
  * is rejected so nothing is ever typed that the model did not explicitly return.
@@ -49,19 +75,18 @@ export async function generateFieldText(
   context: FieldContext
 ): Promise<string> {
   const cfg = settings.textHelper;
-  const preset = TEXT_HELPER_PRESETS[cfg.provider] || TEXT_HELPER_PRESETS.openrouter;
-  const baseUrl = ((cfg.baseUrl || '').trim() || preset.baseUrl).replace(/\/+$/, '');
-  const model = (cfg.model || '').trim() || preset.model;
+  const status = describeHelperKey(settings);
+  const { baseUrl, model } = status;
 
-  let apiKey = (cfg.apiKey || '').trim();
   // Share the OpenRouter key only when the helper actually talks to OpenRouter.
-  if (!apiKey && baseUrl.includes('openrouter.ai')) {
-    apiKey = (settings.openrouter.apiKey || '').trim();
-  }
+  const apiKey =
+    status.source === 'helper'
+      ? (cfg.apiKey || '').trim()
+      : status.source === 'openrouter'
+      ? (settings.openrouter.apiKey || '').trim()
+      : '';
   if (!apiKey) {
-    throw new Error(
-      'TYPE_TEXT needs a text helper API key. Configure it in Options; no text is guessed by the executor.'
-    );
+    throw new Error(`TYPE_TEXT cannot run: ${status.message} No text is guessed by the executor.`);
   }
 
   const isOpenRouter = baseUrl.includes('openrouter.ai');

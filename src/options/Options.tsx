@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { callJevProvider } from '../shared/providers';
+import { describeHelperKey } from '../shared/text-helper';
 import {
   AppSettings,
   DEFAULT_SETTINGS,
@@ -361,6 +362,9 @@ export const Options: React.FC = () => {
             />
           </div>
 
+          <p style={{ ...styles.helpText, color: describeHelperKey(settings).source ? '#86efac' : '#fca5a5' }}>
+            {describeHelperKey(settings).message}
+          </p>
           <div style={styles.field}>
             <label style={styles.label}>Base URL</label>
             <input
