@@ -1,9 +1,34 @@
 # JevBrowserExt
 
-一个用 [TypeSafe Jev](https://typesafe.ai) 驱动网页的 Chrome 扩展。Jev 不生成文本，它在几百毫秒内直接选出下一步该点哪、该在哪输入、该选哪个下拉项。本项目是 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) 的 Manifest V3 移植：同样的观察格式、同样的问题、同样的执行规则，跑在你自己的浏览器和标签页里。
+[![check](https://github.com/chy4pro/JevBrowserExt/actions/workflows/check.yml/badge.svg)](https://github.com/chy4pro/JevBrowserExt/actions/workflows/check.yml)
+[![release](https://img.shields.io/github/v/release/chy4pro/JevBrowserExt?display_name=tag)](https://github.com/chy4pro/JevBrowserExt/releases)
+[![license](https://img.shields.io/github/license/chy4pro/JevBrowserExt)](LICENSE)
+
+一个直接驱动你当前标签页的 Chrome 扩展，决策模型是 [TypeSafe Jev](https://typesafe.ai)：它不生成文本，几百毫秒内直接选出下一步该点哪、该在哪输入、该选哪个下拉项。本项目是 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) 的 Manifest V3 移植：同样的观察格式、同样的问题、同样的执行规则。
 
 [English](README.md) | [简体中文](README_CN.md)
 
+![Google Flights 单程苏黎世到伦敦 2026-09-20，由扩展在 headless Chromium 里以真实速度完成](docs/demo.gif)
+
+*在弹窗里输入一个目标。十次决策，约十一秒，测试环境按真实速度录制；编号徽章是模型能看到的元素。*
+
+## 为什么做成扩展
+
+- **你的浏览器，你的登录态。** 它就在你已经打开的标签页里跑，用你的 Cookie、登录状态和日常 Chrome 配置。除了扩展什么都不用装，没有 Python、没有 Playwright、没有第二个浏览器。
+- **拒绝自动化浏览器的网站不再是问题。** 在数据中心的 headless 浏览器里，测试套件会被好几个站点的 Cloudflare "verify you are human" 页面拦住；同样的页面在真实 Chrome 配置下正常打开，模型看到的就是页面本身。
+- **看得见，也能单步走。** 徽章标出模型看到的元素，状态栏显示决策和延迟，**Step** 一次只执行一个决策，**Copy trace** 把整次运行导出来报 bug。
+- **和参考实现同一套策略，外加几件它还没做的事。** 跟进点击打开的新标签页、按渲染位置点击换行的链接、不提供被其他块盖住的控件、两个独立的概率检查否决过早的 DONE。
+
+| | JevBrowserExt | jev-ultrafast | jev-browser (jkudish) | browser-use |
+|---|---|---|---|---|
+| 运行在 | 你自己的 Chrome 标签页和配置 | Browser Harness 持有的 Chrome 标签页（CDP） | Playwright 浏览器 | Playwright 或 Browser Use 云端 |
+| 需要的运行时 | Chrome | Python、uv、Browser Harness | Node | Python |
+| 每步谁做决定 | Jev：一次请求选操作和元素 | Jev：一次请求选操作和元素 | Jev 选动作；目标/卡住检查 | 一个 LLM |
+| 谁写输入的文字 | 小文本模型 | 小文本模型 | 文本模型或启发式 | 那个 LLM |
+
+其他项目的描述取自它们 2026 年 9 月的 README。
+
+## 工作方式
 ## 工作方式
 
 1. 内容脚本读取当前可见页面：每个可交互元素得到一个由代码分配的编号、角色、可访问名称和当前值；可见文本最多取 6,000 字符。不截图。
@@ -53,7 +78,11 @@ Jev 返回的是候选项上的概率分布，弹窗里每一步都能看到模�
 
 ## 安装
 
-暂未上架商店，从源码构建：
+暂未上架 Chrome 应用商店。
+
+**用发布包**：到 [Releases 页面](https://github.com/chy4pro/JevBrowserExt/releases)下载 `jevbrowserext-<版本>.zip`，解压，打开 `chrome://extensions`，开启开发者模式，点 **加载已解压的扩展程序**，选择解压出来的目录。
+
+**从源码**：
 
 ```bash
 git clone https://github.com/chy4pro/JevBrowserExt.git
@@ -62,7 +91,7 @@ npm install
 npm run build
 ```
 
-打开 `chrome://extensions`，开启开发者模式，点 **加载已解压的扩展程序**，选择 `dist/` 目录。
+然后同样方式加载 `dist/` 目录。
 
 ## 配置
 
@@ -87,6 +116,10 @@ npm run build
 点工具栏图标，输入目标，按 **Run**。**Step** 只执行一步，方便逐步观察决策；**Stop** 中止。页面上会给模型能看到的元素画编号徽章，底部有一条状态栏显示当前动作和延迟。
 
 运行会在以下情况停止：模型给出 `DONE` 或 `BLOCKED`、连续三个动作都没有改变页面、步数预算用完、任何渠道报错。置信度低于 50% 的 `DONE`/`BLOCKED` 会等页面稳定后再问一次，重复才算数。目标被遮挡、或文本模型无法从目标里推出该填什么，会反馈给模型，两次之后该目标不再提供。`DONE` 是模型的判断，不是证明，请自己看一眼页面。
+
+## 哪些数据会离开你的浏览器
+
+每一步向你选择的 Jev 渠道（OpenRouter、TypeSafe 或 Cloudflare）发一个请求，内容是：你的目标、当前标签页的 URL、标题和可见文本（最多 6,000 字符）、可交互元素表（标签、当前值、链接目标）、最近十个动作。模型决定打字时，会向文本模型发一个请求，内容是目标、字段和同样的页面文本。不会发往任何别的地方，没有遥测。API key 只存在你本机的 `chrome.storage.local`。密码框永远不读不填，`chrome://` 页面会被拒绝。申请 `<all_urls>` 权限是因为扩展必须读取你指定的那个标签页；没有开始运行的标签页上它什么都不做。
 
 ## 能处理和不能处理的
 

@@ -466,7 +466,7 @@ export class AgentRunner {
       if (operationAnswer.confidence < TERMINAL_CONFIRM_THRESHOLD && this.pendingTerminal !== operation) {
         // A hesitant verdict gets one more look after the page settles; only a repeat ends the run.
         this.pendingTerminal = operation;
-        this.sendStatus({ text: `${operation}? confirming`, latencyMs });
+        this.sendStatus({ text: operation === 'DONE' ? 'Checking whether the task is complete…' : 'Checking for another way forward…', latencyMs });
         await new Promise((r) => setTimeout(r, 600));
         return true;
       }

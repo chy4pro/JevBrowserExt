@@ -11,8 +11,11 @@
  * the model's DONE. Results go to <E2E_OUT>/<task>/ (run.log, step screenshots) and
  * <E2E_OUT>/summary.md.
  *
- * Env: E2E_OUT (default .e2e-out), E2E_MAX_STEPS, CHROMIUM_PATH.
+ * Env: E2E_OUT (default .e2e-out), E2E_MAX_STEPS, CHROMIUM_PATH, E2E_LOCALE,
+ *      E2E_VIDEO=1 (record each task's web tab; also renders <task>/demo.gif when ffmpeg is
+ *      found via FFMPEG or Playwright's bundled copy).
  */
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -97,6 +100,7 @@ async function launch(log: Log): Promise<{ context: BrowserContext; sw: Worker; 
     headless: true,
     viewport: { width: 1280, height: 800 },
     locale: process.env.E2E_LOCALE || 'en-US',
+    ...(process.env.E2E_VIDEO === '1' ? { recordVideo: { dir: path.join(OUT, 'video'), size: { width: 1280, height: 800 } } } : {}),
     args: [`--disable-extensions-except=${DIST}`, `--load-extension=${DIST}`, '--no-sandbox', '--disable-gpu'],
   });
   let [sw] = context.serviceWorkers();
@@ -202,11 +206,45 @@ async function runTask(context: BrowserContext, sw: Worker, extId: string, task:
   } finally {
     log.save(path.join(dir, 'run.log'));
     await popup?.close().catch(() => undefined);
+    const videos: string[] = [];
     for (const p of context.pages()) {
-      if (!p.url().startsWith('chrome-extension://')) await p.close().catch(() => undefined);
+      if (p.url().startsWith('chrome-extension://')) continue;
+      const v = p.video();
+      await p.close().catch(() => undefined);
+      if (v) videos.push(await v.path());
     }
+    // The web tab's recording is the large one; short-lived helper pages produce tiny files.
+    const largest = videos.filter((f) => fs.existsSync(f)).sort((x, y) => fs.statSync(y).size - fs.statSync(x).size)[0];
+    if (largest) await saveRecording(largest, dir, log);
   }
   return result;
+}
+
+function findFfmpeg(): string | null {
+  if (process.env.FFMPEG && fs.existsSync(process.env.FFMPEG)) return process.env.FFMPEG;
+  const base = path.join(os.homedir(), '.cache', 'ms-playwright');
+  if (!fs.existsSync(base)) return null;
+  for (const d of fs.readdirSync(base)) {
+    if (!d.startsWith('ffmpeg-')) continue;
+    for (const f of fs.readdirSync(path.join(base, d))) if (f.startsWith('ffmpeg')) return path.join(base, d, f);
+  }
+  return null;
+}
+
+/** Keeps the tab recording as demo.webm and renders demo.gif (10 fps, 960 px wide) when ffmpeg is available. */
+async function saveRecording(video: string, dir: string, log: Log): Promise<void> {
+  const webm = path.join(dir, 'demo.webm');
+  fs.copyFileSync(video, webm);
+  const ffmpeg = findFfmpeg();
+  if (!ffmpeg) { log.add(`video saved: ${webm} (no ffmpeg found for gif)`); return; }
+  const gif = path.join(dir, 'demo.gif');
+  const filters = 'fps=10,scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5';
+  try {
+    execFileSync(ffmpeg, ['-y', '-loglevel', 'error', '-i', webm, '-vf', filters, gif], { stdio: 'pipe' });
+    log.add(`video saved: ${webm}; gif: ${gif} (${Math.round(fs.statSync(gif).size / 1024)} KB)`);
+  } catch (err: any) {
+    log.add(`gif conversion failed: ${err?.message || err}`);
+  }
 }
 
 function summary(results: Result[]): string {

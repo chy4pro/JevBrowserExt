@@ -1,9 +1,34 @@
 # JevBrowserExt
 
-A Chrome extension that drives web pages with [TypeSafe Jev](https://typesafe.ai), a decision model that picks the next click, keystroke or dropdown value in a few hundred milliseconds instead of generating text. It is a Manifest V3 port of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast): same observation format, same questions, same execution rules, running inside your own browser and your own tabs.
+[![check](https://github.com/chy4pro/JevBrowserExt/actions/workflows/check.yml/badge.svg)](https://github.com/chy4pro/JevBrowserExt/actions/workflows/check.yml)
+[![release](https://img.shields.io/github/v/release/chy4pro/JevBrowserExt?display_name=tag)](https://github.com/chy4pro/JevBrowserExt/releases)
+[![license](https://img.shields.io/github/license/chy4pro/JevBrowserExt)](LICENSE)
+
+A Chrome extension that drives the tab you are looking at with [TypeSafe Jev](https://typesafe.ai), a decision model that picks the next click, keystroke or dropdown value in a few hundred milliseconds instead of generating text. It is a Manifest V3 port of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast): same observation format, same questions, same execution rules.
 
 [English](README.md) | [简体中文](README_CN.md)
 
+![Google Flights, one-way Zurich to London on September 20 2026, driven by the extension in headless Chromium at real speed](docs/demo.gif)
+
+*One goal typed into the popup. Ten decisions, about eleven seconds, recorded at real speed by the test harness; the numbered badges are the elements the model could see.*
+
+## Why an extension
+
+- **Your browser, your sessions.** It runs in the tab you already have open, with your cookies and logins, on your normal Chrome profile. Nothing to install besides the extension; no Python, no Playwright, no second browser.
+- **Sites that turn away automated browsers are not a problem.** In a datacenter headless browser the test suite is stopped by Cloudflare's "verify you are human" page on several sites; the same pages open normally in a real Chrome profile, and the model just sees the page.
+- **Watch it and step it.** Badges show what the model sees, a status bar shows the decision and its latency, **Step** executes one decision at a time, **Copy trace** exports the run for a bug report.
+- **Same policy as the reference, and a few things it does not do yet.** Links that open new tabs are followed, wrapped links are clicked where they render, controls hidden under other blocks are not offered, and two independent probability checks veto a premature DONE.
+
+| | JevBrowserExt | jev-ultrafast | jev-browser (jkudish) | browser-use |
+|---|---|---|---|---|
+| Runs in | your own Chrome tab and profile | a Chrome tab owned by Browser Harness (CDP) | a Playwright browser | Playwright or Browser Use cloud |
+| Runtime you need | Chrome | Python, uv, Browser Harness | Node | Python |
+| Who decides each step | Jev: operation + element in one request | Jev: operation + element in one request | Jev picks the action; goal/stuck checks | an LLM |
+| Who writes typed text | small text model | small text model | text model or heuristic | the LLM |
+
+Descriptions of the other projects are taken from their READMEs in September 2026.
+
+## How it works
 ## How it works
 
 1. The content script reads the visible page: every interactive element gets a code-owned index, a role, an accessible name and its current value. Visible text is captured up to 6,000 characters. No screenshots.
@@ -53,7 +78,11 @@ Sites behind Cloudflare's "verify you are human" page (Cambridge Dictionary, All
 
 ## Install
 
-There is no store listing yet. Build it from source:
+There is no Chrome Web Store listing yet.
+
+**From a release**: download `jevbrowserext-<version>.zip` from the [Releases page](https://github.com/chy4pro/JevBrowserExt/releases), unzip it, open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the unzipped folder.
+
+**From source**:
 
 ```bash
 git clone https://github.com/chy4pro/JevBrowserExt.git
@@ -62,7 +91,7 @@ npm install
 npm run build
 ```
 
-Then open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the `dist/` folder.
+Then load the `dist/` folder the same way.
 
 ## Configure
 
@@ -87,6 +116,10 @@ The **Test** button on each provider sends a tiny real request and shows the ans
 Click the toolbar icon, type a goal, press **Run**. **Step** executes exactly one action so you can watch decisions one at a time; **Stop** aborts. The page shows numbered badges on the elements the model can see and a small status bar with the current action and its latency.
 
 Runs stop on `DONE`, on `BLOCKED`, after three consecutive actions that changed nothing on the page, when the step budget is exhausted, or on any provider error. A `DONE` or `BLOCKED` given with less than 50% confidence is asked once more after the page settles before it counts. A target that turns out to be covered, or a field the text model cannot fill from the goal, is reported back to the model and withheld after two attempts. `DONE` is the model's opinion, not proof; check the page.
+
+## What leaves your browser
+
+Each step sends one request to the Jev provider you chose (OpenRouter, TypeSafe or Cloudflare) containing: your goal, the current tab's URL, title and visible text (up to 6,000 characters), the table of interactive elements with their labels, current values and link targets, and the last ten actions. When the model decides to type, one request goes to the text model with the goal, the field and the same page text. Nothing is sent anywhere else; there is no telemetry. API keys stay in `chrome.storage.local` on your machine. Password fields are never read or filled, and `chrome://` pages are refused. The `<all_urls>` permission exists because the extension has to read the tab you point it at; it does nothing on tabs where you have not started a run.
 
 ## What is and isn't handled
 
