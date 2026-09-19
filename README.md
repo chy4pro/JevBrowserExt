@@ -10,7 +10,7 @@ A Chrome extension that drives the tab you are looking at with [TypeSafe Jev](ht
 
 ![Google Flights, one-way Zurich to London on September 20 2026, driven by the extension in headless Chromium at real speed](docs/demo.gif)
 
-*One goal typed into the popup. Ten decisions, about eleven seconds, recorded at real speed by the test harness; the numbered badges are the elements the model could see.*
+*One goal typed into the popup. Ten decisions, about thirteen seconds, recorded at real speed by the test harness ([webm](docs/demo.webm)); the numbered badges are the elements the model could see.*
 
 ## Why an extension
 
