@@ -149,3 +149,34 @@ describe('validateChoiceAnswer', () => {
     ).toThrow();
   });
 });
+
+describe('mergeSettings migration', () => {
+  it('rewrites model ids stored by older versions that OpenRouter rejects', async () => {
+    const { mergeSettings } = await import('../src/shared/types');
+    const s = mergeSettings({
+      openrouter: { apiKey: 'k', model: 'typesafe/jev-latest', endpoint: '' },
+      textHelper: { provider: 'openrouter', apiKey: '', baseUrl: 'https://openrouter.ai/api/v1', model: 'deepseek-chat' },
+    } as any);
+    expect(s.openrouter.model).toBe('typesafe/jev-1.13');
+    expect(s.openrouter.endpoint).toBe('https://openrouter.ai/api/alpha/decisions');
+    expect(s.openrouter.apiKey).toBe('k');
+    expect(s.textHelper.model).toBe('deepseek/deepseek-chat');
+  });
+
+  it('keeps a bare DeepSeek id when the helper talks to DeepSeek directly, and fills empty fields', async () => {
+    const { mergeSettings } = await import('../src/shared/types');
+    const s = mergeSettings({
+      openrouter: { apiKey: '', model: '  ', endpoint: '' },
+      textHelper: { provider: 'deepseek', apiKey: 'd', baseUrl: '', model: 'deepseek-chat' },
+    } as any);
+    expect(s.openrouter.model).toBe('typesafe/jev-1.13');
+    expect(s.textHelper.baseUrl).toBe('https://api.deepseek.com/v1');
+    expect(s.textHelper.model).toBe('deepseek-chat');
+    expect(s.maxSteps).toBe(30);
+  });
+
+  it('leaves a custom model id alone', async () => {
+    const { mergeSettings } = await import('../src/shared/types');
+    expect(mergeSettings({ openrouter: { apiKey: '', model: 'typesafe/jev-2.0', endpoint: 'x' } } as any).openrouter.model).toBe('typesafe/jev-2.0');
+  });
+});

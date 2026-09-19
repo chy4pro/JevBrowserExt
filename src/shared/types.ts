@@ -77,7 +77,23 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showOverlay: true,
 };
 
-/** Deep-merges stored settings over the defaults so new nested keys always exist. */
+/**
+ * Model ids that earlier versions of this extension stored as defaults but that the provider
+ * rejects today. They are rewritten on load so an old install keeps working after an update.
+ * OpenRouter has no `typesafe/jev-latest`; that alias only exists on the TypeSafe API.
+ */
+export const OBSOLETE_OPENROUTER_JEV_MODELS: Record<string, string> = {
+  'typesafe/jev-latest': 'typesafe/jev-1.13',
+  'typesafe/jev': 'typesafe/jev-1.13',
+};
+
+/** Bare DeepSeek ids are only valid on api.deepseek.com; OpenRouter needs the vendor prefix. */
+export const OBSOLETE_OPENROUTER_TEXT_MODELS: Record<string, string> = {
+  'deepseek-chat': 'deepseek/deepseek-chat',
+  'deepseek-reasoner': 'deepseek/deepseek-r1',
+};
+
+/** Deep-merges stored settings over the defaults and migrates values known to be obsolete. */
 export function mergeSettings(stored: Partial<AppSettings> | undefined | null): AppSettings {
   const s = stored || {};
   const merged: AppSettings = {
@@ -89,23 +105,21 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined | null): 
     textHelper: { ...DEFAULT_SETTINGS.textHelper, ...(s.textHelper || {}) },
   };
 
-  // Auto-migrate obsolete or invalid OpenRouter model IDs stored in Chrome storage
-  if (
-    !merged.openrouter.model ||
-    merged.openrouter.model === 'typesafe/jev-latest' ||
-    merged.openrouter.model === 'jev-latest'
-  ) {
-    merged.openrouter.model = 'typesafe/jev-1.13';
-  }
+  const jevModel = (merged.openrouter.model || '').trim();
+  merged.openrouter.model = OBSOLETE_OPENROUTER_JEV_MODELS[jevModel] || jevModel || DEFAULT_SETTINGS.openrouter.model;
+  if (!(merged.openrouter.endpoint || '').trim()) merged.openrouter.endpoint = DEFAULT_SETTINGS.openrouter.endpoint;
 
-  // Auto-migrate obsolete text helper models (404 models or ambiguous slugs)
-  if (
-    merged.textHelper.model === 'deepseek-chat' ||
-    merged.textHelper.model?.includes('1.5-8b') ||
-    !merged.textHelper.model
-  ) {
-    merged.textHelper.model = 'deepseek/deepseek-chat';
-  }
+  if (!(merged.typesafe.model || '').trim()) merged.typesafe.model = DEFAULT_SETTINGS.typesafe.model;
+  if (!(merged.typesafe.endpoint || '').trim()) merged.typesafe.endpoint = DEFAULT_SETTINGS.typesafe.endpoint;
+  if (!(merged.cloudflare.model || '').trim()) merged.cloudflare.model = DEFAULT_SETTINGS.cloudflare.model;
+
+  const helper = merged.textHelper;
+  if (!TEXT_HELPER_PRESETS[helper.provider]) helper.provider = DEFAULT_SETTINGS.textHelper.provider;
+  const preset = TEXT_HELPER_PRESETS[helper.provider];
+  if (!(helper.baseUrl || '').trim()) helper.baseUrl = preset.baseUrl;
+  const textModel = (helper.model || '').trim();
+  helper.model =
+    (helper.baseUrl.includes('openrouter.ai') && OBSOLETE_OPENROUTER_TEXT_MODELS[textModel]) || textModel || preset.model;
 
   return merged;
 }

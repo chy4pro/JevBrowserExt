@@ -235,3 +235,18 @@ describe('postJson retry policy', () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('OpenRouter unknown-model error', () => {
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()));
+  afterEach(() => vi.restoreAllMocks());
+
+  it('explains how to fix an obsolete model id', async () => {
+    (global.fetch as any).mockResolvedValueOnce({
+      ok: false, status: 400,
+      text: async () => '{"error":{"message":"Model typesafe/jev-latest does not exist","code":400}}',
+    });
+    await expect(
+      callOpenRouter({ apiKey: 'k', model: 'typesafe/jev-latest', endpoint: '' }, dummyRequest)
+    ).rejects.toThrow(/set it to "typesafe\/jev-1.13"/);
+  });
+});

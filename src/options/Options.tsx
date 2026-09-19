@@ -74,6 +74,21 @@ export const Options: React.FC = () => {
     }
   };
 
+  const handleResetDefaults = () => {
+    setSettings({
+      ...DEFAULT_SETTINGS,
+      activeProvider: settings.activeProvider,
+      typesafe: { ...DEFAULT_SETTINGS.typesafe, apiKey: settings.typesafe.apiKey },
+      openrouter: { ...DEFAULT_SETTINGS.openrouter, apiKey: settings.openrouter.apiKey },
+      cloudflare: {
+        ...DEFAULT_SETTINGS.cloudflare,
+        accountId: settings.cloudflare.accountId,
+        apiToken: settings.cloudflare.apiToken,
+      },
+      textHelper: { ...DEFAULT_SETTINGS.textHelper, apiKey: settings.textHelper.apiKey },
+    });
+  };
+
   const handleTextProviderChange = (provider: TextHelperProvider) => {
     const preset = TEXT_HELPER_PRESETS[provider];
     setSettings({
@@ -205,9 +220,9 @@ export const Options: React.FC = () => {
                     })
                   }
                 />
-                <small style={{ color: '#6b7280', fontSize: '11px', marginTop: '4px', display: 'block' }}>
-                  Standard OpenRouter slug: <code>typesafe/jev-1.13</code> (Note: OpenRouter does not support <code>typesafe/jev-latest</code>)
-                </small>
+                <p style={styles.helpText}>
+                  Use <code>typesafe/jev-1.13</code>. OpenRouter has no <code>typesafe/jev-latest</code>; that alias only exists on the TypeSafe API.
+                </p>
               </div>
               <div style={styles.field}>
                 <label style={styles.label}>Endpoint</label>
@@ -415,6 +430,13 @@ export const Options: React.FC = () => {
         <div style={styles.actionsRow}>
           <button style={styles.btnPrimary} onClick={handleSave}>
             Save All Settings
+          </button>
+          <button
+            style={styles.btnSecondary}
+            title="Restore endpoints, model ids and runtime options to their defaults. API keys are kept."
+            onClick={handleResetDefaults}
+          >
+            Reset to defaults
           </button>
           {savedToast && <span style={styles.savedToast}>✅ Settings saved!</span>}
         </div>
