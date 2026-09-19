@@ -147,7 +147,7 @@ async function runTask(context: BrowserContext, sw: Worker, extId: string, task:
     popup = await context.newPage();
     attachPageLogging(popup, log);
     await popup.goto(`chrome-extension://${extId}/popup.html?tabId=${tabId}`);
-    await popup.getByText('Jev Ultrafast').first().waitFor({ timeout: 10000 });
+    await popup.getByText('Jev for Chrome').first().waitFor({ timeout: 10000 });
     await popup.locator('textarea').fill(task.goal);
     await popup.getByRole('button', { name: /Run Ultrafast/ }).click();
     await page.bringToFront();
@@ -289,7 +289,7 @@ async function main() {
     const options = await context.newPage();
     attachPageLogging(options, log);
     await options.goto(`chrome-extension://${extId}/options.html`);
-    await options.getByText('Jev Ultrafast Extension Settings').waitFor({ timeout: 10000 });
+    await options.getByText('Jev for Chrome settings').waitFor({ timeout: 10000 });
     log.add(`options page ok; model = "${await options.locator('input[placeholder="typesafe/jev-1.13"]').inputValue()}"`);
     await options.screenshot({ path: path.join(OUT, 'options.png') });
     await options.close();

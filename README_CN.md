@@ -1,10 +1,10 @@
-# JevBrowserExt
+# Jev for Chrome
 
-[![check](https://github.com/chy4pro/JevBrowserExt/actions/workflows/check.yml/badge.svg)](https://github.com/chy4pro/JevBrowserExt/actions/workflows/check.yml)
-[![release](https://img.shields.io/github/v/release/chy4pro/JevBrowserExt?display_name=tag)](https://github.com/chy4pro/JevBrowserExt/releases)
-[![license](https://img.shields.io/github/license/chy4pro/JevBrowserExt)](LICENSE)
+[![check](https://github.com/chy4pro/jev-for-chrome/actions/workflows/check.yml/badge.svg)](https://github.com/chy4pro/jev-for-chrome/actions/workflows/check.yml)
+[![release](https://img.shields.io/github/v/release/chy4pro/jev-for-chrome?display_name=tag)](https://github.com/chy4pro/jev-for-chrome/releases)
+[![license](https://img.shields.io/github/license/chy4pro/jev-for-chrome)](LICENSE)
 
-一个直接驱动你当前标签页的 Chrome 扩展，决策模型是 [TypeSafe Jev](https://typesafe.ai)：它不生成文本，几百毫秒内直接选出下一步该点哪、该在哪输入、该选哪个下拉项。本项目是 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) 的 Manifest V3 移植：同样的观察格式、同样的问题、同样的执行规则。
+一个直接驱动你当前标签页的 Chrome 扩展，决策模型是 [TypeSafe Jev](https://typesafe.ai)：它不生成文本，几百毫秒内直接选出下一步该点哪、该在哪输入、该选哪个下拉项。本项目是 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) 的 Manifest V3 移植：同样的观察格式、同样的问题、同样的执行规则。社区项目，与 TypeSafe 和 Browser Use 均无隶属关系。
 
 [English](README.md) | [简体中文](README_CN.md)
 
@@ -19,7 +19,7 @@
 - **看得见，也能单步走。** 徽章标出模型看到的元素，状态栏显示决策和延迟，**Step** 一次只执行一个决策，**Copy trace** 把整次运行导出来报 bug。
 - **和参考实现同一套策略，外加几件它还没做的事。** 跟进点击打开的新标签页、按渲染位置点击换行的链接、不提供被其他块盖住的控件、两个独立的概率检查否决过早的 DONE。
 
-| | JevBrowserExt | jev-ultrafast | jev-browser (jkudish) | browser-use |
+| | Jev for Chrome | jev-ultrafast | jev-browser (jkudish) | browser-use |
 |---|---|---|---|---|
 | 运行在 | 你自己的 Chrome 标签页和配置 | Browser Harness 持有的 Chrome 标签页（CDP） | Playwright 浏览器 | Playwright 或 Browser Use 云端 |
 | 需要的运行时 | Chrome | Python、uv、Browser Harness | Node | Python |
@@ -80,13 +80,13 @@ Jev 返回的是候选项上的概率分布，弹窗里每一步都能看到模�
 
 暂未上架 Chrome 应用商店。
 
-**用发布包**：到 [Releases 页面](https://github.com/chy4pro/JevBrowserExt/releases)下载 `jevbrowserext-<版本>.zip`，解压，打开 `chrome://extensions`，开启开发者模式，点 **加载已解压的扩展程序**，选择解压出来的目录。
+**用发布包**：到 [Releases 页面](https://github.com/chy4pro/jev-for-chrome/releases)下载 `jev-for-chrome-<版本>.zip`，解压，打开 `chrome://extensions`，开启开发者模式，点 **加载已解压的扩展程序**，选择解压出来的目录。
 
 **从源码**：
 
 ```bash
-git clone https://github.com/chy4pro/JevBrowserExt.git
-cd JevBrowserExt
+git clone https://github.com/chy4pro/jev-for-chrome.git
+cd jev-for-chrome
 npm install
 npm run build
 ```

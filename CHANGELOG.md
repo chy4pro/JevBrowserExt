@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.0 — 2026-09-19
+- Renamed to Jev for Chrome (repository chy4pro/jev-for-chrome; the old URL redirects). Extension name, popup and options titles, package name and release archive name follow.
+- Community project, not affiliated with TypeSafe or Browser Use; stated in the manifest description and README.
+
 ## 1.3.1 — 2026-09-19
 - Follow tabs opened by a click (target=_blank, window.open); return to the opener when that tab closes.
 - Fixture pages served by the test harness; new-tab task in the suite.

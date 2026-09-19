@@ -1,10 +1,10 @@
-# JevBrowserExt
+# Jev for Chrome
 
-[![check](https://github.com/chy4pro/JevBrowserExt/actions/workflows/check.yml/badge.svg)](https://github.com/chy4pro/JevBrowserExt/actions/workflows/check.yml)
-[![release](https://img.shields.io/github/v/release/chy4pro/JevBrowserExt?display_name=tag)](https://github.com/chy4pro/JevBrowserExt/releases)
-[![license](https://img.shields.io/github/license/chy4pro/JevBrowserExt)](LICENSE)
+[![check](https://github.com/chy4pro/jev-for-chrome/actions/workflows/check.yml/badge.svg)](https://github.com/chy4pro/jev-for-chrome/actions/workflows/check.yml)
+[![release](https://img.shields.io/github/v/release/chy4pro/jev-for-chrome?display_name=tag)](https://github.com/chy4pro/jev-for-chrome/releases)
+[![license](https://img.shields.io/github/license/chy4pro/jev-for-chrome)](LICENSE)
 
-A Chrome extension that drives the tab you are looking at with [TypeSafe Jev](https://typesafe.ai), a decision model that picks the next click, keystroke or dropdown value in a few hundred milliseconds instead of generating text. It is a Manifest V3 port of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast): same observation format, same questions, same execution rules.
+A Chrome extension that drives the tab you are looking at with [TypeSafe Jev](https://typesafe.ai), a decision model that picks the next click, keystroke or dropdown value in a few hundred milliseconds instead of generating text. It is a Manifest V3 port of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast): same observation format, same questions, same execution rules. Community project, not affiliated with TypeSafe or Browser Use.
 
 [English](README.md) | [简体中文](README_CN.md)
 
@@ -19,7 +19,7 @@ A Chrome extension that drives the tab you are looking at with [TypeSafe Jev](ht
 - **Watch it and step it.** Badges show what the model sees, a status bar shows the decision and its latency, **Step** executes one decision at a time, **Copy trace** exports the run for a bug report.
 - **Same policy as the reference, and a few things it does not do yet.** Links that open new tabs are followed, wrapped links are clicked where they render, controls hidden under other blocks are not offered, and two independent probability checks veto a premature DONE.
 
-| | JevBrowserExt | jev-ultrafast | jev-browser (jkudish) | browser-use |
+| | Jev for Chrome | jev-ultrafast | jev-browser (jkudish) | browser-use |
 |---|---|---|---|---|
 | Runs in | your own Chrome tab and profile | a Chrome tab owned by Browser Harness (CDP) | a Playwright browser | Playwright or Browser Use cloud |
 | Runtime you need | Chrome | Python, uv, Browser Harness | Node | Python |
@@ -80,13 +80,13 @@ Sites behind Cloudflare's "verify you are human" page (Cambridge Dictionary, All
 
 There is no Chrome Web Store listing yet.
 
-**From a release**: download `jevbrowserext-<version>.zip` from the [Releases page](https://github.com/chy4pro/JevBrowserExt/releases), unzip it, open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the unzipped folder.
+**From a release**: download `jev-for-chrome-<version>.zip` from the [Releases page](https://github.com/chy4pro/jev-for-chrome/releases), unzip it, open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the unzipped folder.
 
 **From source**:
 
 ```bash
-git clone https://github.com/chy4pro/JevBrowserExt.git
-cd JevBrowserExt
+git clone https://github.com/chy4pro/jev-for-chrome.git
+cd jev-for-chrome
 npm install
 npm run build
 ```

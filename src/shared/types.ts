@@ -1,5 +1,5 @@
 /**
- * Core type definitions for JevBrowserExt
+ * Core type definitions for Jev for Chrome
  */
 
 export type JevProviderType = 'typesafe' | 'openrouter' | 'cloudflare';

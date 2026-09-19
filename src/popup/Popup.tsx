@@ -137,8 +137,8 @@ export const Popup: React.FC = () => {
         <div style={styles.headerLeft}>
           <span style={styles.boltIcon}>⚡</span>
           <div>
-            <div style={styles.title}>Jev Ultrafast</div>
-            <div style={styles.subtitle}>System 1 Browser Agent</div>
+            <div style={styles.title}>Jev for Chrome</div>
+            <div style={styles.subtitle}>Unofficial Jev browser agent</div>
           </div>
         </div>
         <div style={styles.headerRight}>

@@ -14,8 +14,8 @@ export function normalizeOpenRouterModel(rawModel?: string): string {
 }
 
 export const OPENROUTER_HEADERS = {
-  'HTTP-Referer': 'https://github.com/chy4pro/JevBrowserExt',
-  'X-Title': 'JevBrowserExt',
+  'HTTP-Referer': 'https://github.com/chy4pro/jev-for-chrome',
+  'X-Title': 'Jev for Chrome',
 };
 
 export async function callOpenRouter(

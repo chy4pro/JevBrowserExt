@@ -103,7 +103,7 @@ export const Options: React.FC = () => {
     <div style={styles.container}>
       <div style={styles.card}>
         <div style={styles.header}>
-          <h1 style={styles.title}>⚡ Jev Ultrafast Extension Settings</h1>
+          <h1 style={styles.title}>⚡ Jev for Chrome settings</h1>
           <p style={styles.subtitle}>
             Configure your Jev model provider (TypeSafe.ai, OpenRouter, Cloudflare) and Text Helper.
           </p>
