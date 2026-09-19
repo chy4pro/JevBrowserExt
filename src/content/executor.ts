@@ -60,6 +60,47 @@ function dispatchPointerSequence(el: Element, x: number, y: number): void {
   el.dispatchEvent(new MouseEvent('mouseup', init));
 }
 
+/**
+ * True when the covering element and the target live in the same small component, such as
+ * a hover layer over a product card. Dialogs and page-wide overlays never qualify, so a
+ * modal still blocks clicks on what lies beneath it.
+ */
+function sameComponent(element: Element, hit: Element): boolean {
+  if (hit.closest('dialog,[role="dialog"],[aria-modal="true"]')) return false;
+  let ancestor: Element | null = element.parentElement;
+  while (ancestor && !ancestor.contains(hit)) ancestor = ancestor.parentElement;
+  if (!ancestor || ancestor === document.body || ancestor === document.documentElement) return false;
+  if (['MAIN', 'HEADER', 'NAV', 'FOOTER', 'SECTION'].includes(ancestor.tagName)) return false;
+  const r = ancestor.getBoundingClientRect();
+  return r.height < window.innerHeight * 0.6 && r.width < window.innerWidth * 0.9;
+}
+
+function clickableAt(element: HTMLElement, hit: Element | null): HTMLElement {
+  let node: Element | null = hit;
+  while (node && node !== element && element.contains(node)) {
+    if (node instanceof HTMLElement && typeof node.click === 'function') return node;
+    node = node.parentElement;
+  }
+  return element;
+}
+
+/**
+ * Presses Enter in a text field the way a user would: key events for scripts that listen for
+ * them, then the field's own form is submitted unless a handler cancelled the key.
+ */
+function pressEnter(field: HTMLElement): void {
+  field.focus();
+  const init: KeyboardEventInit = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+  const down = field.dispatchEvent(new KeyboardEvent('keydown', init));
+  const press = field.dispatchEvent(new KeyboardEvent('keypress', init));
+  field.dispatchEvent(new KeyboardEvent('keyup', init));
+  const form = (field as HTMLInputElement).form;
+  if (down && press && form) {
+    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+    else form.submit();
+  }
+}
+
 function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   // Use the prototype setter so React-style value trackers notice the change.
   const prototype = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -120,7 +161,7 @@ export async function executeAction(action: PageAction, text?: string): Promise<
       return stale('Target moved out of the viewport. Observe again.');
     }
     const hit = document.elementFromPoint(x, y);
-    if (hit && !element.contains(hit) && !hit.contains(element)) {
+    if (hit && !element.contains(hit) && !hit.contains(element) && !sameComponent(element, hit)) {
       return stale('Target is covered by another element. Observe again.');
     }
 
@@ -168,12 +209,19 @@ export async function executeAction(action: PageAction, text?: string): Promise<
 
     if (action.kind === 'click') {
       // A real pointer lands on the innermost element at the point, e.g. the <a> inside an
-      // option row; dispatching on that element lets its activation behavior run.
-      const clickTarget = hit && hit !== element && element.contains(hit) ? (hit as HTMLElement) : element;
+      // option row; dispatching on that element lets its activation behavior run. SVG icons
+      // have no click(), so walk up to the nearest HTML element inside the target.
+      const clickTarget = hit && element.contains(hit) ? clickableAt(element, hit) : element;
       dispatchPointerSequence(clickTarget, x, y);
       element.focus();
       // One click only. click() runs the activation behavior (toggle, navigate, submit).
       clickTarget.click();
+      await settleAfter(action);
+      return { success: true };
+    }
+
+    if (action.kind === 'key') {
+      pressEnter(element);
       await settleAfter(action);
       return { success: true };
     }

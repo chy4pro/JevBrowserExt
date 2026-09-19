@@ -219,7 +219,7 @@ export interface ElementRect {
   h: number;
 }
 
-export type ActionKind = 'click' | 'fill' | 'select' | 'scroll' | 'wait';
+export type ActionKind = 'click' | 'fill' | 'select' | 'scroll' | 'wait' | 'key';
 
 export interface PageAction {
   id: string; // e.g. "e1", "e2", "scroll_down", "scroll_up", "wait"

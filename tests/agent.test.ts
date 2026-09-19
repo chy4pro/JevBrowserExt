@@ -136,7 +136,10 @@ describe('AgentRunner', () => {
   });
 
   it('discards a stale decision, re-observes, and gives up after repeated staleness', async () => {
-    jev.mockResolvedValue(answer('CLICK', clickTarget('1')));
+    // Always take the first offered click target; withheld targets change what is offered.
+    jev.mockImplementation(async (_s, request) =>
+      answer('CLICK', clickTarget(Object.keys((request.questions.click_target as ChoiceQuestion).criteria)[0]))
+    );
     page.act = () => ({ success: false, stale: true, error: 'Page changed' });
     const r = runner();
     await r.start('Search', 7);
@@ -144,8 +147,9 @@ describe('AgentRunner', () => {
     expect(r.getProgress().status).toBe('error');
     expect(r.getProgress().lastError).toMatch(/kept changing/);
     expect(r.getProgress().currentStep).toBe(0);
-    expect(jev).toHaveBeenCalledTimes(3);
-    expect(jev.mock.calls[2][1].state.recent_actions).toEqual([]);
+    expect(jev).toHaveBeenCalledTimes(4);
+    expect(jev.mock.calls[3][1].state.recent_actions).toEqual([]);
+    expect(page.sent.filter((m) => m.type === 'CONTENT_ACT').map((m) => m.action.id)).toEqual(['e1', 'e1', 'e3', 'e3']);
   });
 
   it('blocks after three consecutive non-wait actions that change nothing', async () => {
@@ -259,5 +263,99 @@ describe('isNavigationError', () => {
       'Extension context invalidated.',
     ]) expect(isNavigationError(m), m).toBe(true);
     expect(isNavigationError('Target element is not a <select> element')).toBe(false);
+  });
+});
+
+describe('covered targets', () => {
+  beforeEach(() => {
+    jev.mockReset();
+    textHelper.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('tells the model about a covered target and withholds it after two misses', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: false, stale: true, error: 'Target is covered by another element. Observe again.' }), sent: [] };
+    installChrome(page);
+    jev.mockImplementation(async (_s, request) => {
+      const keys = Object.keys((request.questions.click_target as ChoiceQuestion).criteria);
+      return answer('CLICK', clickTarget(keys[0]));
+    });
+    const r = runner();
+    await r.start('Search', 7);
+
+    const second = jev.mock.calls[1][1];
+    expect((second.questions.operation.instructions as any).ineffective_action_alert).toMatch(/could not be acted on/);
+    // e1 (target "1") is withheld from the third decision, so the model is offered e3 instead.
+    const third = jev.mock.calls[2][1];
+    expect(Object.keys((third.questions.click_target as ChoiceQuestion).criteria)).toEqual(['2']);
+    expect(r.getProgress().status).toBe('error');
+    expect(r.getProgress().currentStep).toBe(0);
+  });
+});
+
+describe('text helper refusal', () => {
+  beforeEach(() => {
+    jev.mockReset();
+    textHelper.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('continues with a notice instead of ending the run when the helper finds no value', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: true }), sent: [] };
+    installChrome(page);
+    const typeText = { type_text_target: { choice: '2', confidence: 0.8, probabilities: { '2': 1 } } };
+    jev.mockResolvedValueOnce(answer('TYPE_TEXT', typeText)).mockResolvedValueOnce(answer('DONE'));
+    textHelper.mockRejectedValueOnce(new Error('Text helper found no value for this field in the goal; nothing typed.'));
+    const r = runner();
+    await r.start('Reach the Eiffel Tower article using only links', 7);
+
+    expect(r.getProgress().status).toBe('done');
+    expect(page.sent.filter((m) => m.type === 'CONTENT_ACT')).toHaveLength(0);
+    expect((jev.mock.calls[1][1].questions.operation.instructions as any).ineffective_action_alert).toMatch(/No value for the field/);
+  });
+
+  it('still stops on a real helper failure such as a bad API key', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: true }), sent: [] };
+    installChrome(page);
+    jev.mockResolvedValue(answer('TYPE_TEXT', { type_text_target: { choice: '2', confidence: 0.8, probabilities: { '2': 1 } } }));
+    textHelper.mockRejectedValue(new Error('Text helper error (HTTP 401): bad key'));
+    const r = runner();
+    await r.start('Type something', 7);
+    expect(r.getProgress().status).toBe('error');
+    expect(jev).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('hesitant verdicts', () => {
+  beforeEach(() => {
+    jev.mockReset();
+    textHelper.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const hesitant = (choice: string) => ({
+    model: 'm',
+    answers: { operation: { choice, confidence: 0.3, probabilities: { [choice]: 0.4, CLICK: 0.35, WAIT: 0.25 } } },
+  });
+
+  it('takes a second look before accepting a low-confidence BLOCKED, and continues if the model changes its mind', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: true }), sent: [] };
+    installChrome(page);
+    jev.mockResolvedValueOnce(hesitant('BLOCKED')).mockResolvedValueOnce(answer('CLICK', clickTarget('1'))).mockResolvedValueOnce(answer('DONE'));
+    const r = runner();
+    await r.start('Search', 7);
+    expect(r.getProgress().status).toBe('done');
+    expect(page.sent.filter((m) => m.type === 'CONTENT_ACT')).toHaveLength(1);
+    expect(jev).toHaveBeenCalledTimes(3);
+  });
+
+  it('ends the run when the low-confidence verdict repeats', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: true }), sent: [] };
+    installChrome(page);
+    jev.mockResolvedValue(hesitant('BLOCKED'));
+    const r = runner();
+    await r.start('Search', 7);
+    expect(r.getProgress().status).toBe('blocked');
+    expect(jev).toHaveBeenCalledTimes(2);
   });
 });

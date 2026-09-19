@@ -1,0 +1,123 @@
+[
+  {
+    "name": "Popup: Google Flights one-way ZRH-LON",
+    "url": "https://www.google.com/travel/flights",
+    "goal": "Find one-way flights from Zurich to London on September 20, 2026",
+    "maxSteps": 14,
+    "expectUrl": "travel/flights/search",
+    "expectText": "One way"
+  },
+  {
+    "name": "Popup: Wikipedia Taylor Swift early life",
+    "url": "https://en.wikipedia.org/wiki/Main_Page",
+    "goal": "Search for Taylor Swift and open her early life section",
+    "maxSteps": 8,
+    "expectUrl": "wiki/Taylor_Swift",
+    "expectText": "Early life"
+  },
+  {
+    "name": "Popup: highest-rated product to cart (LambdaTest OpenCart demo)",
+    "url": "https://ecommerce-playground.lambdatest.io/index.php?route=product/category&path=20",
+    "goal": "Add the highest-rated product to shopping cart",
+    "maxSteps": 8,
+    "expectText": "Success: You have added|added to your shopping cart"
+  },
+  {
+    "name": "Reference: Wikipedia Gödel article",
+    "url": "https://en.wikipedia.org/wiki/Main_Page",
+    "goal": "Find and open the Wikipedia article about Gödel's incompleteness theorems.",
+    "maxSteps": 8,
+    "expectUrl": "incompleteness_theorems"
+  },
+  {
+    "name": "X/Krouse: Wikiracing Rubber duck → Eiffel Tower",
+    "url": "https://en.wikipedia.org/wiki/Rubber_duck",
+    "goal": "Reach the article about the Eiffel Tower, using only links on the page.",
+    "maxSteps": 14,
+    "expectUrl": "wiki/Eiffel_Tower"
+  },
+  {
+    "name": "X/Krouse: Hacker News top story comments",
+    "url": "https://news.ycombinator.com",
+    "goal": "Open the comments for the top story on the front page.",
+    "maxSteps": 6,
+    "expectUrl": "item\\?id="
+  },
+  {
+    "name": "X/Krouse: Val Town Airtable examples",
+    "url": "https://www.val.town",
+    "goal": "Find the Airtable api examples",
+    "maxSteps": 10,
+    "expectText": "airtable"
+  },
+  {
+    "name": "X/jev-browser: Wikipedia Coffee → Espresso",
+    "url": "https://en.wikipedia.org/wiki/Coffee",
+    "goal": "Navigate to the Espresso article",
+    "maxSteps": 8,
+    "expectUrl": "wiki/Espresso"
+  },
+  {
+    "name": "X/jev-browser: GitHub newest release",
+    "url": "https://github.com/browser-use/browser-use",
+    "goal": "Find the newest release and stop on it",
+    "maxSteps": 8,
+    "expectUrl": "releases"
+  },
+  {
+    "name": "X/jev-browser: Wikipedia search Ristretto",
+    "url": "https://en.wikipedia.org/wiki/Main_Page",
+    "goal": "Search Wikipedia for Ristretto and stop on the article",
+    "maxSteps": 8,
+    "expectUrl": "wiki/Ristretto"
+  },
+  {
+    "name": "X/Terin: Python tutorial Data Structures",
+    "url": "https://docs.python.org/3/",
+    "goal": "Open the Data Structures chapter of the Python tutorial",
+    "maxSteps": 10,
+    "expectUrl": "tutorial/datastructures"
+  },
+  {
+    "name": "WebVoyager-style: Wiktionary serendipity",
+    "url": "https://en.wiktionary.org/wiki/Wiktionary:Main_Page",
+    "goal": "Look up the word serendipity and open its definition",
+    "maxSteps": 8,
+    "expectUrl": "wiki/serendipity"
+  },
+  {
+    "name": "WebVoyager: arXiv Attention Is All You Need",
+    "url": "https://arxiv.org",
+    "goal": "Search arXiv for the paper 'Attention Is All You Need' and open its abstract page",
+    "maxSteps": 8,
+    "expectUrl": "abs/1706.03762"
+  },
+  {
+    "name": "WebVoyager: Hugging Face whisper-large-v3",
+    "url": "https://huggingface.co",
+    "goal": "Search models for whisper and open the openai/whisper-large-v3 model page",
+    "maxSteps": 8,
+    "expectUrl": "openai/whisper-large-v3"
+  },
+  {
+    "name": "WebVoyager: Wolfram Alpha derivative",
+    "url": "https://www.wolframalpha.com",
+    "goal": "Compute the derivative of x^3 sin x",
+    "maxSteps": 6,
+    "expectUrl": "wolframalpha\\.com/input\\?i=derivative"
+  },
+  {
+    "name": "WebVoyager-style: Wikibooks Cookbook banana bread",
+    "url": "https://en.wikibooks.org/wiki/Cookbook:Table_of_Contents",
+    "goal": "Find the banana bread recipe and open it",
+    "maxSteps": 8,
+    "expectUrl": "Cookbook:Banana_Bread"
+  },
+  {
+    "name": "WebVoyager: BBC technology section",
+    "url": "https://www.bbc.com/news",
+    "goal": "Open the technology section",
+    "maxSteps": 6,
+    "expectUrl": "bbc\\.com/(innovation|technology|news/technology)"
+  }
+]

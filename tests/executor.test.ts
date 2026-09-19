@@ -165,3 +165,95 @@ describe('executeAction', () => {
     expect(await executeAction(actionFor(snapshot.actions, (a) => a.id === 'wait'))).toEqual({ success: true });
   });
 });
+
+describe('click targets and PRESS_ENTER', () => {
+  beforeEach(() => {
+    delete (window as any).__jevFast;
+    fakeLayout();
+  });
+
+  it('clicks the button when the pointer lands on an SVG icon inside it', async () => {
+    document.body.innerHTML = '<button id="go"><svg id="icon" viewBox="0 0 10 10"><path d="M0 0h10v10z"/></svg></button>';
+    const button = document.getElementById('go')!;
+    let clicks = 0;
+    button.addEventListener('click', () => clicks++);
+    const snapshot = takeSnapshot()!;
+    (document as any).elementFromPoint = () => document.querySelector('#icon path');
+    const res = await executeAction(actionFor(snapshot.actions, (a) => a.role === 'button'));
+    expect(res).toEqual({ success: true });
+    expect(clicks).toBe(1);
+  });
+
+  it('offers PRESS_ENTER only for a focused field with text, and submits that field\'s own form', async () => {
+    document.body.innerHTML =
+      '<form id="other"><input aria-label="Other" value="x"></form>' +
+      '<form id="mine"><input id="q" aria-label="Query"></form>';
+    const q = document.getElementById('q') as HTMLInputElement;
+    expect(takeSnapshot()!.actions.find((a) => a.id === 'press_enter')).toBeUndefined();
+
+    q.focus();
+    q.value = 'hello';
+    const snapshot = takeSnapshot()!;
+    const press = snapshot.actions.find((a) => a.id === 'press_enter');
+    expect(press).toMatchObject({ kind: 'key', label: 'Press Enter in the focused field "Query" to submit it' });
+
+    const submitted: string[] = [];
+    for (const id of ['mine', 'other']) {
+      const form = document.getElementById(id) as HTMLFormElement;
+      form.addEventListener('submit', (e) => { e.preventDefault(); submitted.push(id); });
+      (form as any).requestSubmit = () => form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
+    const keys: string[] = [];
+    q.addEventListener('keydown', (e) => keys.push(e.key));
+    expect(await executeAction(press!)).toEqual({ success: true });
+    expect(keys).toEqual(['Enter']);
+    expect(submitted).toEqual(['mine']);
+  });
+
+  it('does not submit the form when a keydown handler cancels Enter', async () => {
+    document.body.innerHTML = '<form id="f"><input id="q" aria-label="Query"></form>';
+    const q = document.getElementById('q') as HTMLInputElement;
+    const form = document.getElementById('f') as HTMLFormElement;
+    let submits = 0;
+    (form as any).requestSubmit = () => submits++;
+    q.addEventListener('keydown', (e) => e.preventDefault());
+    q.focus();
+    q.value = 'x';
+    const snapshot = takeSnapshot()!;
+    await executeAction(actionFor(snapshot.actions, (a) => a.id === 'press_enter'));
+    expect(submits).toBe(0);
+  });
+});
+
+describe('covers inside one component', () => {
+  beforeEach(() => {
+    delete (window as any).__jevFast;
+    fakeLayout();
+  });
+
+  it('clicks through a hover layer that belongs to the same product card', async () => {
+    document.body.innerHTML =
+      '<main><ul><li id="card" style="position:relative"><a id="p" href="#prod">Apple Cinema 30"</a><div id="hover" style="position:absolute;inset:0;opacity:0"></div></li></ul></main>';
+    const link = document.getElementById('p')!;
+    let clicks = 0;
+    link.addEventListener('click', (e) => { clicks++; e.preventDefault(); });
+    const snapshot = takeSnapshot()!;
+    (document as any).elementFromPoint = () => document.getElementById('hover');
+    const res = await executeAction(actionFor(snapshot.actions, (a) => a.label.startsWith('Apple')));
+    expect(res).toEqual({ success: true });
+    expect(clicks).toBe(1);
+  });
+
+  it('still refuses to click beneath a dialog', async () => {
+    document.body.innerHTML =
+      '<div id="wrap"><a id="p" href="#prod">Buy</a><div role="dialog" id="modal">Cookies?</div></div>';
+    const link = document.getElementById('p')!;
+    let clicks = 0;
+    link.addEventListener('click', () => clicks++);
+    const snapshot = takeSnapshot()!;
+    (document as any).elementFromPoint = () => document.getElementById('modal');
+    const res = await executeAction(actionFor(snapshot.actions, (a) => a.label === 'Buy'));
+    expect(res.stale).toBe(true);
+    expect(clicks).toBe(0);
+  });
+});

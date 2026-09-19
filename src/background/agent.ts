@@ -34,7 +34,9 @@ export function isNavigationError(message: string): boolean {
 
 const INTERNAL_PREFIXES = ['chrome://', 'chrome-extension://', 'edge://', 'about:', 'view-source:', 'devtools://'];
 
-const MAX_CONSECUTIVE_STALE = 3;
+const MAX_CONSECUTIVE_STALE = 4;
+/** DONE/BLOCKED below this confidence is confirmed by a second look before the run ends. */
+const TERMINAL_CONFIRM_THRESHOLD = 0.5;
 const DEADLOCK_RUN = 3;
 
 export class AgentRunner {
@@ -56,6 +58,8 @@ export class AgentRunner {
   private decisionCount = 0;
   private targetFailureCount = new Map<string, number>();
   private lastTargetActionId: string | null = null;
+  private lastStaleNotice: string | null = null;
+  private pendingTerminal: string | null = null;
   /** Text generated for a decision that turned out stale; reused only for an identical helper input. */
   private pendingText: { key: string; text: string } | null = null;
 
@@ -79,6 +83,8 @@ export class AgentRunner {
     this.decisionCount = 0;
     this.targetFailureCount.clear();
     this.lastTargetActionId = null;
+    this.lastStaleNotice = null;
+    this.pendingTerminal = null;
     this.pendingText = null;
     this.progress = {
       status: 'running',
@@ -170,11 +176,14 @@ export class AgentRunner {
     await new Promise((r) => setTimeout(r, 150));
   }
 
+  private lastPingError = '';
+
   private async ping(tabId: number): Promise<boolean> {
     try {
       const res = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
       return !!res?.pong;
-    } catch {
+    } catch (err: any) {
+      this.lastPingError = err?.message || String(err);
       return false;
     }
   }
@@ -190,17 +199,22 @@ export class AgentRunner {
     }
     // Inject as soon as a document exists instead of waiting for the load event: the script
     // guards against double registration, so a later manifest injection is harmless.
-    for (let attempt = 0; attempt < 4; attempt++) {
+    let injectError = '';
+    for (let attempt = 0; attempt < 6; attempt++) {
       if (await this.ping(tabId)) return;
       try {
         await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
-      } catch {
-        // Document not ready or being replaced; retry below.
+      } catch (err: any) {
+        injectError = err?.message || String(err);
       }
-      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+      const current = attempt >= 3 ? await chrome.tabs.get(tabId).catch(() => null) : null;
+      if (current?.status === 'loading') await this.waitForTabToLoad(tabId, 2000);
+      else await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
     }
     if (!(await this.ping(tabId))) {
-      throw new Error('Content script did not respond after injection. Reload the page and try again.');
+      throw new Error(
+        `Content script did not respond after injection (${this.lastPingError || 'no reply'}${injectError ? `; inject: ${injectError}` : ''}). Reload the page and try again.`
+      );
     }
   }
 
@@ -260,7 +274,10 @@ export class AgentRunner {
     let warning: string | undefined;
     if (last && last.page_changed === false && last.kind !== 'wait') {
       warning = `ATTENTION: Previous action "${last.action}" resulted in NO visible change on the page. Do NOT repeat the exact same action. Try an alternative target, scroll, or submit button.`;
+    } else if (this.lastStaleNotice) {
+      warning = this.lastStaleNotice;
     }
+    this.lastStaleNotice = null;
     const suppressedTargetIds = Array.from(this.targetFailureCount.entries())
       .filter(([, count]) => count >= 2)
       .map(([id]) => id);
@@ -301,6 +318,13 @@ export class AgentRunner {
     const provider = this.settings.activeProvider;
 
     if (operation === 'DONE' || operation === 'BLOCKED') {
+      if (operationAnswer.confidence < TERMINAL_CONFIRM_THRESHOLD && this.pendingTerminal !== operation) {
+        // A hesitant verdict gets one more look after the page settles; only a repeat ends the run.
+        this.pendingTerminal = operation;
+        this.sendStatus({ text: `${operation}? confirming`, latencyMs });
+        await new Promise((r) => setTimeout(r, 600));
+        return true;
+      }
       this.addLog({
         step: this.progress.currentStep,
         timestamp: Date.now(),
@@ -314,6 +338,8 @@ export class AgentRunner {
       this.sendStatus({ text: operation === 'DONE' ? 'Done' : 'Blocked', latencyMs });
       return false;
     }
+
+    this.pendingTerminal = null;
 
     // 5. Resolve the target from the selected operation's head only
     let targetAction: PageAction | undefined;
@@ -354,8 +380,22 @@ export class AgentRunner {
         try {
           generatedText = await generateFieldText(this.settings, context);
         } catch (err: any) {
-          this.finish('error', `Text helper failed: ${err?.message || String(err)}`);
-          return false;
+          const message = err?.message || String(err);
+          if (!/nothing typed/i.test(message)) {
+            this.finish('error', `Text helper failed: ${message}`);
+            return false;
+          }
+          // The helper could not derive a value from the goal: the field is not the way
+          // forward. Tell the model and withhold the field after two attempts.
+          this.consecutiveStale++;
+          if (this.consecutiveStale >= MAX_CONSECUTIVE_STALE) {
+            this.finish('error', `Text helper failed: ${message}`);
+            return false;
+          }
+          this.targetFailureCount.set(targetAction.id, (this.targetFailureCount.get(targetAction.id) || 0) + 1);
+          this.lastStaleNotice = `ATTENTION: No value for the field "${targetAction.label}" can be derived from the goal, so TYPE_TEXT there is not possible. Use links, buttons or other controls instead.`;
+          this.broadcastUpdate();
+          return true;
         }
         this.pendingText = { key, text: generatedText };
       }
@@ -377,6 +417,10 @@ export class AgentRunner {
           this.finish('error', `Page kept changing before actions could run: ${actResponse.error || 'stale'}`);
           return false;
         }
+        // A covered or vanished target counts as a miss: the model is told, and after two
+        // misses the target is withheld while alternatives exist.
+        this.targetFailureCount.set(targetAction.id, (this.targetFailureCount.get(targetAction.id) || 0) + 1);
+        this.lastStaleNotice = `ATTENTION: The target "${targetAction.label}" could not be acted on (${actResponse.error || 'page changed'}). If an overlay or dialog is open, act inside it or close it; otherwise choose a different target.`;
         this.broadcastUpdate();
         return true; // observe again; nothing was executed
       }

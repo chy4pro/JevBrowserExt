@@ -141,6 +141,20 @@ function roleOf(e: Element): string | null {
   return null;
 }
 
+export function isEditableField(e: Element): boolean {
+  if (e.tagName === 'TEXTAREA') return !(e as HTMLTextAreaElement).readOnly;
+  if (e.tagName === 'INPUT') {
+    const input = e as HTMLInputElement;
+    return !input.readOnly && !['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'hidden', 'password', 'range', 'color'].includes(input.type);
+  }
+  return (e as HTMLElement).isContentEditable === true;
+}
+
+export function fieldValue(e: Element): string {
+  if ('value' in e) return String((e as HTMLInputElement).value ?? '');
+  return (e as HTMLElement).innerText ?? e.textContent ?? '';
+}
+
 const innerText = (e: Element | null | undefined): string => {
   if (!e) return '';
   const t = (e as HTMLElement).innerText;
@@ -338,6 +352,15 @@ function readState(): { snapshot: PageSnapshot; observed: ObservedState } | null
   }
   if (window.scrollY > 0) {
     actions.push({ id: 'scroll_up', kind: 'scroll', label: 'Scroll up', delta: -560 });
+  }
+  const focused = document.activeElement as HTMLElement | null;
+  if (focused && isEditableField(focused) && fieldValue(focused).trim()) {
+    actions.push({
+      id: 'press_enter',
+      kind: 'key',
+      node: identity(cache, focused),
+      label: `Press Enter in the focused field "${accessibleName(focused) || 'text field'}" to submit it`,
+    });
   }
   actions.push({ id: 'wait', kind: 'wait', label: 'Wait for the page to update' });
 
