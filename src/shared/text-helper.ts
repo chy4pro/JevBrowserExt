@@ -1,5 +1,7 @@
 import { TEXT_VALUE_PROMPT } from './prompts';
-import { AppSettings, PageAction, RecentAction } from './types';
+import { OPENROUTER_HEADERS } from './providers/openrouter';
+import { postJson } from './providers/http';
+import { AppSettings, PageAction, RecentAction, TEXT_HELPER_PRESETS } from './types';
 
 export interface FieldContext {
   goal: string;
@@ -12,7 +14,7 @@ export interface FieldContext {
     title: string;
     text: string;
   };
-  recent_actions: RecentAction[];
+  recent_actions: Array<Pick<RecentAction, 'action' | 'text'>>;
 }
 
 export function createFieldContext(
@@ -32,112 +34,84 @@ export function createFieldContext(
       title: page.title,
       text: page.text.slice(0, 6000),
     },
-    recent_actions: history.slice(-6),
+    recent_actions: history.slice(-6).map((h) => ({ action: h.action, text: h.text })),
   };
 }
 
+const MAX_TEXT_LENGTH = 2000;
+
+/**
+ * Asks the small text model for exactly one field value. Any malformed or empty answer
+ * is rejected so nothing is ever typed that the model did not explicitly return.
+ */
 export async function generateFieldText(
   settings: AppSettings,
   context: FieldContext
 ): Promise<string> {
   const cfg = settings.textHelper;
+  const preset = TEXT_HELPER_PRESETS[cfg.provider] || TEXT_HELPER_PRESETS.openrouter;
+  const baseUrl = ((cfg.baseUrl || '').trim() || preset.baseUrl).replace(/\/+$/, '');
+  const model = (cfg.model || '').trim() || preset.model;
 
-  let apiKey = cfg.apiKey;
-  let baseUrl = cfg.baseUrl || 'https://openrouter.ai/api/v1';
-  let model = cfg.model || 'deepseek/deepseek-chat';
-
-  // Fallback to OpenRouter key if user hasn't set separate text helper key
-  if (!apiKey && settings.activeProvider === 'openrouter' && settings.openrouter.apiKey) {
-    apiKey = settings.openrouter.apiKey;
-    baseUrl = 'https://openrouter.ai/api/v1';
+  let apiKey = (cfg.apiKey || '').trim();
+  // Share the OpenRouter key only when the helper actually talks to OpenRouter.
+  if (!apiKey && baseUrl.includes('openrouter.ai')) {
+    apiKey = (settings.openrouter.apiKey || '').trim();
   }
-
-  // Sanitize model identifiers for OpenRouter
-  if (baseUrl.includes('openrouter.ai')) {
-    if (model === 'deepseek-chat') {
-      model = 'deepseek/deepseek-chat';
-    } else if (model === 'deepseek-reasoner') {
-      model = 'deepseek/deepseek-r1';
-    } else if (model.includes('1.5-8b') || model.includes('2.0-flash') || !model.trim()) {
-      model = 'deepseek/deepseek-chat';
-    }
-  }
-
   if (!apiKey) {
     throw new Error(
-      'Text Generation Helper requires an API Key for TYPE_TEXT operations. Please configure it in Options.'
+      'TYPE_TEXT needs a text helper API key. Configure it in Options; no text is guessed by the executor.'
     );
   }
 
-  const endpoint = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
-
-  const messages = [
-    { role: 'system', content: TEXT_VALUE_PROMPT },
-    { role: 'user', content: JSON.stringify(context) },
-  ];
+  const isOpenRouter = baseUrl.includes('openrouter.ai');
+  const isDeepSeek = baseUrl.includes('api.deepseek.com');
 
   const payload: Record<string, any> = {
     model,
-    max_tokens: 512,
-    messages,
+    max_tokens: 1024,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: TEXT_VALUE_PROMPT },
+      { role: 'user', content: JSON.stringify(context) },
+    ],
+    ...(isDeepSeek ? { thinking: { type: 'disabled' } } : {}),
   };
 
-  let response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey.trim()}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://github.com/browser-use/jev-browser-ext',
-      'X-Title': 'JevBrowserExt',
-    },
-    body: JSON.stringify(payload),
-  });
+  const json = await postJson(
+    `${baseUrl}/chat/completions`,
+    { Authorization: `Bearer ${apiKey}`, ...(isOpenRouter ? OPENROUTER_HEADERS : {}) },
+    payload,
+    { label: 'Text helper' }
+  );
 
-  // If error on OpenRouter, fallback to deepseek/deepseek-chat or google/gemini-3.7-flash
-  if (!response.ok && baseUrl.includes('openrouter.ai') && payload.model !== 'deepseek/deepseek-chat') {
-    payload.model = 'deepseek/deepseek-chat';
-    response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey.trim()}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://github.com/browser-use/jev-browser-ext',
-        'X-Title': 'JevBrowserExt',
-      },
-      body: JSON.stringify(payload),
-    });
+  const rawContent = json?.choices?.[0]?.message?.content;
+  if (typeof rawContent !== 'string' || !rawContent.trim()) {
+    throw new Error('Text helper returned an empty message; nothing typed.');
   }
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Text helper HTTP ${response.status}: ${errorText}`);
-  }
+  return parseFieldText(rawContent);
+}
 
-  const json = await response.json();
-  const rawContent = json.choices?.[0]?.message?.content;
-  if (!rawContent) {
-    throw new Error('Text helper returned empty message');
-  }
+export function parseFieldText(rawContent: string): string {
+  // Tolerate ```json fences, but nothing else: the body must be the JSON object itself.
+  const cleaned = rawContent.replace(/```(?:json)?/gi, '').trim();
 
-  // Strip possible markdown code blocks ```json ... ```
-  const cleanedContent = rawContent
-    .replace(/```(?:json)?/gi, '')
-    .replace(/```/g, '')
-    .trim();
-
+  let parsed: any;
   try {
-    const parsed = JSON.parse(cleanedContent);
-    const textVal = parsed.text;
-    if (textVal === null || textVal === undefined) {
-      throw new Error('Text helper determined value is missing from goal context');
-    }
-    return String(textVal);
-  } catch (err: any) {
-    const match = cleanedContent.match(/"text"\s*:\s*"([^"]+)"/);
-    if (match) return match[1];
-    // If model answered with raw plaintext, extract the first non-empty line
-    const fallbackText = cleanedContent.split('\n')[0].trim();
-    if (fallbackText) return fallbackText;
-    throw new Error(`Failed to parse text helper JSON: ${err.message || String(err)}`);
+    parsed = JSON.parse(cleaned);
+  } catch {
+    throw new Error('Text helper did not return a JSON object; nothing typed.');
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('text' in parsed)) {
+    throw new Error('Text helper JSON is missing the "text" key; nothing typed.');
+  }
+  const value = parsed.text;
+  if (value === null) {
+    throw new Error('Text helper found no value for this field in the goal; nothing typed.');
+  }
+  if (typeof value !== 'string' || !value.trim() || value.length > MAX_TEXT_LENGTH) {
+    throw new Error('Text helper returned an invalid field value; nothing typed.');
+  }
+  return value;
 }

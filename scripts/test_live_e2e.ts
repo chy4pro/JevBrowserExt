@@ -1,3 +1,4 @@
+import { validateChoiceAnswer } from '../src/shared/action-space';
 import { callOpenRouter } from '../src/shared/providers/openrouter';
 import { generateFieldText } from '../src/shared/text-helper';
 import { DEFAULT_SETTINGS } from '../src/shared/types';
@@ -23,11 +24,11 @@ async function runLiveTests() {
       provider: 'openrouter' as const,
       apiKey,
       baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'deepseek-chat', // Tests auto-mapping to deepseek/deepseek-chat
+      model: 'deepseek/deepseek-chat',
     },
   };
 
-  // Test 1: Real Text Helper with 'deepseek-chat' auto-sanitization to 'deepseek/deepseek-chat'
+  // Test 1: Real Text Helper returns exactly one JSON field value
   console.log('\n--- 1. Testing Text Helper generation with live OpenRouter API ---');
   const fieldContext = {
     goal: 'Find flights from Zurich to London on September 20',
@@ -49,7 +50,7 @@ async function runLiveTests() {
   // Test 2: Jev Decision API with full state and questions
   console.log('\n--- 2. Testing Jev Decisions API with live OpenRouter API ---');
   const jevRequest = {
-    model: 'typesafe/jev-latest', // Tests auto-migration to typesafe/jev-1.13
+    model: 'typesafe/jev-1.13',
     state: {
       page: {
         url: 'https://www.google.com/travel/flights',
@@ -85,12 +86,16 @@ async function runLiveTests() {
   };
 
   const jevRes = await callOpenRouter(settings.openrouter, jevRequest);
-  console.log('✅ Jev API successfully returned decision:');
+  const operation = validateChoiceAnswer(jevRes.answers?.operation, jevRequest.questions.operation.criteria);
+  if (operation.choice === 'CLICK') {
+    validateChoiceAnswer(jevRes.answers?.click_target, jevRequest.questions.click_target.criteria);
+  }
+  console.log('✅ Jev API returned a valid decision:');
   console.log('   Model:', jevRes.model);
   console.log('   Operation choice:', JSON.stringify(jevRes.answers?.operation));
   console.log('   Click target choice:', JSON.stringify(jevRes.answers?.click_target));
 
-  console.log('\n🎉 ALL LIVE E2E TESTS PASSED SUCCESSFULLY! Zero 400/404 errors!\n');
+  console.log('\n🎉 Live E2E checks passed.\n');
 }
 
 runLiveTests().catch((err) => {

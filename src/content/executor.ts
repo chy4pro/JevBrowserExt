@@ -1,144 +1,182 @@
-import { PageAction } from '../shared/types';
+import { ActResult, PageAction } from '../shared/types';
+import { getCache, isFresh, isVisible } from './snapshot';
 
-export async function executeAction(
-  action: PageAction,
-  text?: string
-): Promise<{ success: boolean; error?: string }> {
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function stale(error: string): ActResult {
+  return { success: false, stale: true, error };
+}
+
+/**
+ * Waits for the page to react to an interaction: up to two animation frames or 50 ms.
+ * An editable ARIA combobox instead waits for visible options, capped at 200 ms, so the
+ * next observation includes autocomplete suggestions instead of paying for an early decision.
+ */
+export function settleAfter(action: PageAction): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const field = action.node !== undefined ? getCache().nodes.get(action.node) : undefined;
+    const autocomplete = action.kind === 'fill' && field?.getAttribute('role') === 'combobox';
+    let frames = 0;
+    let stopped = false;
+    const finish = () => {
+      if (!stopped) {
+        stopped = true;
+        resolve();
+      }
+    };
+    setTimeout(finish, autocomplete ? 200 : 50);
+    if (typeof requestAnimationFrame !== 'function') return;
+
+    const optionVisible = () => {
+      const ids = (field?.getAttribute('aria-controls') || field?.getAttribute('aria-owns') || '')
+        .split(/\s+/)
+        .filter(Boolean);
+      const roots: ParentNode[] = ids.length
+        ? ids.map((id) => document.getElementById(id)).filter((el): el is HTMLElement => !!el)
+        : [document];
+      return roots
+        .flatMap((root) => Array.from(root.querySelectorAll('[role="option"]')))
+        .some((e) => {
+          const r = e.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight && isVisible(e);
+        });
+    };
+
+    const ready = () => {
+      if (stopped) return;
+      if (++frames >= 2 && (!autocomplete || optionVisible())) finish();
+      else requestAnimationFrame(ready);
+    };
+    requestAnimationFrame(ready);
+  });
+}
+
+function dispatchPointerSequence(el: Element, x: number, y: number): void {
+  const init: MouseEventInit = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 };
+  const pointer = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+  el.dispatchEvent(new pointer('pointerdown', { ...init, pointerId: 1, isPrimary: true } as PointerEventInit));
+  el.dispatchEvent(new MouseEvent('mousedown', init));
+  el.dispatchEvent(new pointer('pointerup', { ...init, pointerId: 1, isPrimary: true } as PointerEventInit));
+  el.dispatchEvent(new MouseEvent('mouseup', init));
+}
+
+function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  // Use the prototype setter so React-style value trackers notice the change.
+  const prototype = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+  if (descriptor?.set) {
+    descriptor.set.call(el, value);
+  } else {
+    el.value = value;
+  }
+}
+
+/**
+ * Executes one observed action. Nothing is retried here, and nothing runs when the page no
+ * longer matches the snapshot the decision came from (`stale: true`).
+ */
+export async function executeAction(action: PageAction, text?: string): Promise<ActResult> {
   try {
-    const kind = action.kind;
+    if (!isFresh(action)) {
+      return stale('Page changed since this decision. Observe again.');
+    }
 
-    if (kind === 'wait') {
-      await new Promise((resolve) => setTimeout(resolve, 300));
+    if (action.kind === 'wait') {
+      await sleep(100);
       return { success: true };
     }
 
-    if (kind === 'scroll') {
-      window.scrollBy({
-        top: action.delta || 0,
-        behavior: 'smooth',
-      });
-      await new Promise((resolve) => setTimeout(resolve, 250));
+    if (action.kind === 'scroll') {
+      window.scrollBy({ top: action.delta || 0, behavior: 'instant' as ScrollBehavior });
+      await settleAfter(action);
       return { success: true };
     }
 
-    const cache = window.__jevFast;
-    if (!cache || action.node === undefined) {
-      return { success: false, error: 'Element cache not initialized or invalid node index' };
+    if (typeof action.node !== 'number') {
+      return { success: false, error: 'Invalid observed node' };
     }
-
-    const element = cache.nodes.get(action.node);
+    const element = getCache().nodes.get(action.node) as HTMLElement | undefined;
     if (!element || !element.isConnected) {
-      return { success: false, error: 'Target element is no longer in the DOM (Stale Element)' };
+      return stale('Target element is no longer in the DOM. Observe again.');
     }
-
-    // Scroll into view if needed
-    element.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
-
-    if (kind === 'select') {
-      const selectEl = element as HTMLSelectElement;
-      if (selectEl.tagName === 'SELECT') {
-        selectEl.value = action.value || '';
-        selectEl.dispatchEvent(new Event('input', { bubbles: true }));
-        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
-        return { success: true };
-      } else {
-        return { success: false, error: 'Target element is not a <select> element' };
+    if (
+      element.matches(':disabled') ||
+      element.closest('[aria-disabled="true"],[inert]') ||
+      !isVisible(element)
+    ) {
+      return stale('Target is disabled or hidden. Observe again.');
+    }
+    if (action.kind === 'fill') {
+      const inp = element as HTMLInputElement;
+      if (inp.readOnly || element.getAttribute('aria-readonly') === 'true') {
+        return stale('Target field became read-only. Observe again.');
       }
     }
 
-    if (kind === 'fill') {
-      const inputEl = element as HTMLInputElement | HTMLTextAreaElement;
-      const val = text ?? action.value ?? '';
+    const r = element.getBoundingClientRect();
+    const x = r.x + r.width / 2;
+    const y = r.y + r.height / 2;
+    if (!r.width || !r.height || x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
+      return stale('Target moved out of the viewport. Observe again.');
+    }
+    const hit = document.elementFromPoint(x, y);
+    if (hit && !element.contains(hit) && !hit.contains(element)) {
+      return stale('Target is covered by another element. Observe again.');
+    }
 
+    if (action.kind === 'select') {
+      const selectEl = element as unknown as HTMLSelectElement;
+      if (selectEl.tagName !== 'SELECT') {
+        return { success: false, error: 'Target element is not a <select> element' };
+      }
+      const option = Array.from(selectEl.options).find(
+        (o) => o.value === action.value && !o.disabled && !o.closest('optgroup[disabled]')
+      );
+      if (!option) {
+        return { success: false, error: 'Dropdown option is no longer available; inspect before retrying.' };
+      }
+      selectEl.value = option.value;
+      selectEl.dispatchEvent(new Event('input', { bubbles: true }));
+      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+      await settleAfter(action);
+      return { success: true };
+    }
+
+    if (action.kind === 'fill') {
+      const value = text ?? '';
+      dispatchPointerSequence(element, x, y);
       element.focus();
 
       if (element.isContentEditable) {
-        element.textContent = val;
-        element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
-      } else if ('value' in inputEl) {
-        // Use prototype setter to bypass React 16+ setter overrides
-        const prototype =
-          element.tagName === 'TEXTAREA'
-            ? HTMLTextAreaElement.prototype
-            : HTMLInputElement.prototype;
-        const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
-
-        if (descriptor?.set) {
-          descriptor.set.call(element, val);
-        } else {
-          inputEl.value = val;
+        const selection = window.getSelection();
+        if (selection) {
+          selection.selectAllChildren(element);
+          selection.deleteFromDocument();
         }
-
-        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.textContent = value;
+        element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+      } else {
+        const inp = element as unknown as HTMLInputElement | HTMLTextAreaElement;
+        setNativeValue(inp, value);
+        element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
-
-        // For search boxes or form fields, dispatch Enter key events to allow instant form trigger
-        const isSearchOrForm =
-          inputEl.type === 'search' ||
-          inputEl.name?.toLowerCase().includes('search') ||
-          inputEl.name?.toLowerCase() === 'q' ||
-          inputEl.placeholder?.toLowerCase().includes('search') ||
-          inputEl.closest('form');
-
-        if (isSearchOrForm) {
-          element.dispatchEvent(
-            new KeyboardEvent('keydown', {
-              key: 'Enter',
-              code: 'Enter',
-              keyCode: 13,
-              which: 13,
-              bubbles: true,
-            })
-          );
-          element.dispatchEvent(
-            new KeyboardEvent('keyup', {
-              key: 'Enter',
-              code: 'Enter',
-              keyCode: 13,
-              which: 13,
-              bubbles: true,
-            })
-          );
-        }
       }
-
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      // No synthetic Enter: submitting or picking a suggestion is the model's next decision.
+      await settleAfter(action);
       return { success: true };
     }
 
-    if (kind === 'click') {
-      const htmlEl = element as HTMLElement;
-      htmlEl.focus();
-
-      // Dispatch mouse event sequence
-      const rect = element.getBoundingClientRect();
-      const clientX = rect.x + rect.width / 2;
-      const clientY = rect.y + rect.height / 2;
-
-      const mouseOptions: MouseEventInit = {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX,
-        clientY,
-      };
-
-      element.dispatchEvent(new PointerEvent('pointerdown', mouseOptions));
-      element.dispatchEvent(new MouseEvent('mousedown', mouseOptions));
-      element.dispatchEvent(new PointerEvent('pointerup', mouseOptions));
-      element.dispatchEvent(new MouseEvent('mouseup', mouseOptions));
-      element.dispatchEvent(new MouseEvent('click', mouseOptions));
-
-      // Trigger native click
-      if (typeof htmlEl.click === 'function') {
-        htmlEl.click();
-      }
-
+    if (action.kind === 'click') {
+      dispatchPointerSequence(element, x, y);
+      element.focus();
+      // One click only. element.click() runs the activation behavior (toggle, navigate, submit).
+      element.click();
+      await settleAfter(action);
       return { success: true };
     }
 
-    return { success: false, error: `Unknown action kind: ${kind}` };
+    return { success: false, error: `Unknown action kind: ${String(action.kind)}` };
   } catch (err: any) {
-    return { success: false, error: err.message || String(err) };
+    return { success: false, error: err?.message || String(err) };
   }
 }

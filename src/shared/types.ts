@@ -3,6 +3,7 @@
  */
 
 export type JevProviderType = 'typesafe' | 'openrouter' | 'cloudflare';
+export type TextHelperProvider = 'openrouter' | 'deepseek' | 'openai';
 
 export interface TypeSafeConfig {
   apiKey: string;
@@ -24,11 +25,18 @@ export interface CloudflareConfig {
 }
 
 export interface TextHelperConfig {
-  provider: 'openrouter' | 'deepseek' | 'openai';
+  provider: TextHelperProvider;
   apiKey: string;
   baseUrl: string;
   model: string;
 }
+
+/** Defaults applied when the text helper's base URL or model is left empty. */
+export const TEXT_HELPER_PRESETS: Record<TextHelperProvider, { baseUrl: string; model: string }> = {
+  openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-chat' },
+  deepseek: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+};
 
 export interface AppSettings {
   activeProvider: JevProviderType;
@@ -61,13 +69,26 @@ export const DEFAULT_SETTINGS: AppSettings = {
   textHelper: {
     provider: 'openrouter',
     apiKey: '',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    model: 'deepseek/deepseek-chat',
+    baseUrl: TEXT_HELPER_PRESETS.openrouter.baseUrl,
+    model: TEXT_HELPER_PRESETS.openrouter.model,
   },
   maxSteps: 30,
   stepDelayMs: 300,
   showOverlay: true,
 };
+
+/** Deep-merges stored settings over the defaults so new nested keys always exist. */
+export function mergeSettings(stored: Partial<AppSettings> | undefined | null): AppSettings {
+  const s = stored || {};
+  return {
+    ...DEFAULT_SETTINGS,
+    ...s,
+    typesafe: { ...DEFAULT_SETTINGS.typesafe, ...(s.typesafe || {}) },
+    openrouter: { ...DEFAULT_SETTINGS.openrouter, ...(s.openrouter || {}) },
+    cloudflare: { ...DEFAULT_SETTINGS.cloudflare, ...(s.cloudflare || {}) },
+    textHelper: { ...DEFAULT_SETTINGS.textHelper, ...(s.textHelper || {}) },
+  };
+}
 
 // Jev Question Primitives
 export interface ChoiceQuestion {
@@ -164,10 +185,12 @@ export interface ElementRect {
   h: number;
 }
 
+export type ActionKind = 'click' | 'fill' | 'select' | 'scroll' | 'wait';
+
 export interface PageAction {
   id: string; // e.g. "e1", "e2", "scroll_down", "scroll_up", "wait"
-  node?: number; // internal DOM node ID in content script cache
-  kind: 'click' | 'fill' | 'select' | 'scroll' | 'wait';
+  node?: number; // code-owned DOM node identity in the content script cache
+  kind: ActionKind;
   role?: string;
   label: string;
   value?: string;
@@ -187,10 +210,14 @@ export interface PageSnapshot {
   text: string;
   scroll: { y: number; height: number };
   actions: PageAction[];
-  marker: any[];
-  page_key: any[];
-  guards: Record<string, any>;
   omitted_actions: number;
+}
+
+/** Result of executing one action inside the page. `stale` means nothing was executed. */
+export interface ActResult {
+  success: boolean;
+  stale?: boolean;
+  error?: string;
 }
 
 export type AgentStatus = 'idle' | 'running' | 'paused' | 'done' | 'blocked' | 'error';
@@ -225,11 +252,11 @@ export type ExtensionMessage =
   | { type: 'SAVE_SETTINGS'; settings: AppSettings }
   | { type: 'START_AGENT'; goal: string }
   | { type: 'STOP_AGENT' }
-  | { type: 'STEP_AGENT' }
+  | { type: 'STEP_AGENT'; goal: string }
   | { type: 'GET_PROGRESS' }
   | { type: 'PROGRESS_UPDATE'; progress: AgentProgress }
+  | { type: 'PING' }
   | { type: 'CONTENT_OBSERVE' }
-  | { type: 'CONTENT_OBSERVE_RESULT'; snapshot: PageSnapshot }
   | { type: 'CONTENT_ACT'; action: PageAction; text?: string }
-  | { type: 'CONTENT_ACT_RESULT'; success: boolean; error?: string }
+  | { type: 'CONTENT_STATUS'; text?: string; latencyMs?: number; clear?: boolean }
   | { type: 'TOGGLE_OVERLAY'; show: boolean };

@@ -1,6 +1,5 @@
 import { NEXT_ACTION_RULES, TARGET_RULES } from './prompts';
 import {
-  ElementRect,
   JevQuestions,
   JevRequest,
   ObservedElement,
@@ -8,6 +7,11 @@ import {
   PageSnapshot,
   RecentAction,
 } from './types';
+
+export interface LoopContext {
+  warning?: string;
+  suppressedTargetIds?: string[];
+}
 
 export interface ActionSpaceResult {
   elements: ObservedElement[];
@@ -17,34 +21,41 @@ export interface ActionSpaceResult {
   questions: JevQuestions;
 }
 
+const OP_BY_KIND: Record<string, string> = {
+  click: 'CLICK',
+  fill: 'TYPE_TEXT',
+  select: 'SELECT',
+};
+
+const OP_LABELS: Record<string, string> = {
+  CLICK: 'Click an element, button, menu option, autocomplete suggestion, or calendar day.',
+  TYPE_TEXT:
+    'Enter or replace text in an editable field. A small LLM will supply the value from the goal.',
+  SELECT: 'Select an observed dropdown value.',
+};
+
+/**
+ * One index per observed element; each operation has its own valid target choices.
+ * Controls (scroll/wait) come from the snapshot, so a scroll that cannot move is never offered.
+ */
 export function buildActionSpace(
   actions: PageAction[],
   goal: string,
-  loopContext?: { warning?: string; suppressedTargetIds?: string[] }
+  loopContext?: LoopContext
 ): ActionSpaceResult {
   const elements: ObservedElement[] = [];
   const targets: Record<string, Record<string, PageAction>> = {};
-  const controls: Record<string, PageAction> = {
-    SCROLL_DOWN: { id: 'scroll_down', kind: 'scroll', delta: 500, label: 'Scroll page down' },
-    SCROLL_UP: { id: 'scroll_up', kind: 'scroll', delta: -500, label: 'Scroll page up' },
-    WAIT: { id: 'wait', kind: 'wait', label: 'Wait for page/loading indicator to settle' },
-  };
-
+  const controls: Record<string, PageAction> = {};
   const indices: Record<number, string> = {};
-  const opMap: Record<string, string> = {
-    click: 'CLICK',
-    fill: 'TYPE_TEXT',
-    select: 'SELECT',
-  };
-
-  const suppressedSet = new Set(loopContext?.suppressedTargetIds || []);
 
   for (const action of actions) {
+    const operation = OP_BY_KIND[action.kind];
+    if (!operation) {
+      controls[action.id.toUpperCase()] = action;
+      continue;
+    }
     const node = action.node;
     if (node === undefined) continue;
-
-    const kind = action.kind;
-    if (!opMap[kind]) continue;
 
     if (!(node in indices)) {
       const index = String(elements.length + 1);
@@ -52,93 +63,61 @@ export function buildActionSpace(
 
       const element: ObservedElement = {
         index,
-        label: action.label,
-        role: action.role,
+        label: action.label.split(' → ')[0],
         operations: [],
       };
-
+      if (action.role) element.role = action.role;
       if (action.value) element.value = action.value;
       if (action.checked !== undefined) element.checked = action.checked;
       if (action.selected !== undefined) element.selected = action.selected;
       if (action.expanded !== undefined) element.expanded = action.expanded;
-
-      if (kind === 'select') {
+      if (action.kind === 'select') {
         element.value = action.current_value || '';
         element.options = [];
       }
-
       elements.push(element);
     }
 
     const index = indices[node];
-    const operation = opMap[kind];
     const group = (targets[operation] = targets[operation] || {});
     const element = elements[parseInt(index, 10) - 1];
-
     if (!element.operations.includes(operation)) {
       element.operations.push(operation);
     }
 
     let targetKey = index;
-    if (kind === 'select') {
-      targetKey = `${index}:${(element.options?.length || 0) + 1}`;
+    if (action.kind === 'select') {
       element.options = element.options || [];
-      element.options.push({
-        index: targetKey,
-        label: action.label,
-        value: action.value || '',
-      });
+      targetKey = `${index}:${element.options.length + 1}`;
+      element.options.push({ index: targetKey, label: action.label, value: action.value || '' });
     }
-
     group[targetKey] = action;
   }
 
-  // Filter out suppressed targets if there are alternative targets available in that operation
-  if (suppressedSet.size > 0) {
-    for (const [op, group] of Object.entries(targets)) {
+  // Drop targets that repeatedly produced no change, as long as alternatives remain.
+  const suppressed = new Set(loopContext?.suppressedTargetIds || []);
+  if (suppressed.size > 0) {
+    for (const group of Object.values(targets)) {
       const keys = Object.keys(group);
-      const remaining = keys.filter((k) => !suppressedSet.has(group[k].id));
-      if (remaining.length > 0) {
+      if (keys.some((k) => !suppressed.has(group[k].id))) {
         for (const k of keys) {
-          if (suppressedSet.has(group[k].id)) {
-            delete group[k];
-          }
+          if (suppressed.has(group[k].id)) delete group[k];
         }
       }
     }
   }
 
-  const opLabels: Record<string, string> = {
-    CLICK: 'Click an element, button, menu option, autocomplete suggestion, or calendar day.',
-    TYPE_TEXT:
-      'Enter or replace text in an editable field. A small LLM will supply the value from the goal.',
-    SELECT: 'Select an observed dropdown value.',
-  };
-
   const operations: Record<string, string> = {};
-  for (const key of Object.keys(targets)) {
-    operations[key] = opLabels[key];
-  }
-  for (const [key, value] of Object.entries(controls)) {
-    operations[key] = value.label;
-  }
-  operations['DONE'] = 'Every requirement is visibly satisfied.';
-  operations['BLOCKED'] = 'No supported operation can progress.';
+  for (const key of Object.keys(targets)) operations[key] = OP_LABELS[key];
+  for (const [key, value] of Object.entries(controls)) operations[key] = value.label;
+  operations.DONE = 'Every requirement is visibly satisfied.';
+  operations.BLOCKED = 'No supported operation can progress.';
 
-  const instructionsObj: Record<string, any> = {
-    goal,
-    rules: NEXT_ACTION_RULES,
-  };
-  if (loopContext?.warning) {
-    instructionsObj.ineffective_action_alert = loopContext.warning;
-  }
+  const instructions: Record<string, any> = { goal, rules: NEXT_ACTION_RULES };
+  if (loopContext?.warning) instructions.ineffective_action_alert = loopContext.warning;
 
   const questions: JevQuestions = {
-    operation: {
-      type: 'choice',
-      criteria: operations,
-      instructions: instructionsObj,
-    },
+    operation: { type: 'choice', criteria: operations, instructions },
   };
 
   for (const [operation, candidates] of Object.entries(targets)) {
@@ -153,7 +132,6 @@ export function buildActionSpace(
         ...(a.expanded ? { expanded: a.expanded } : {}),
       };
     }
-
     questions[`${operation.toLowerCase()}_target`] = {
       type: 'choice',
       criteria,
@@ -174,7 +152,7 @@ export function buildJevRequest(
   snapshot: PageSnapshot,
   goal: string,
   history: RecentAction[],
-  loopContext?: { warning?: string; suppressedTargetIds?: string[] }
+  loopContext?: LoopContext
 ): { request: JevRequest; actionSpace: ActionSpaceResult } {
   const actionSpace = buildActionSpace(snapshot.actions, goal, loopContext);
 
@@ -200,44 +178,58 @@ export function buildJevRequest(
   return { request, actionSpace };
 }
 
+export interface ValidatedChoice {
+  choice: string;
+  confidence: number;
+  probabilities: Record<string, number>;
+}
+
+const unit = (n: unknown): n is number =>
+  typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
+
+/**
+ * Strictly validates a choice answer. An invalid answer is rejected rather than "repaired":
+ * the model's choice must be an offered candidate and must agree with its own distribution.
+ */
 export function validateChoiceAnswer(
   answer: any,
   candidates: Record<string, any> | string[]
-): { choice: string; confidence: number; probabilities: Record<string, number> } {
-  if (!answer) {
-    throw new Error('Missing answer object from Jev response');
+): ValidatedChoice {
+  if (!answer || typeof answer !== 'object') {
+    throw new Error('Missing answer object from Jev response; no action executed.');
+  }
+  const allowed = Array.isArray(candidates) ? candidates : Object.keys(candidates);
+  const choice = answer.choice;
+  if (typeof choice !== 'string' || !allowed.includes(choice)) {
+    throw new Error(
+      `Jev returned choice "${String(choice)}", but expected one of: [${allowed.join(', ')}]`
+    );
   }
 
-  const allowed = Array.isArray(candidates) ? candidates : Object.keys(candidates);
-  const probabilities = answer.probabilities || {};
-
-  let choice = answer.choice;
-  if (!choice || !allowed.includes(choice)) {
-    // Try to find candidate in allowed list with highest probability
-    let bestKey: string | null = null;
-    let bestProb = -1;
-    for (const key of allowed) {
-      if (typeof probabilities[key] === 'number' && probabilities[key] > bestProb) {
-        bestProb = probabilities[key];
-        bestKey = key;
-      }
-    }
-    if (bestKey !== null && bestProb > 0) {
-      choice = bestKey;
-    } else {
-      const available = allowed.join(', ');
-      throw new Error(`Jev returned choice "${choice}", but expected one of: [${available}]`);
-    }
+  const probabilities = answer.probabilities;
+  if (!probabilities || typeof probabilities !== 'object') {
+    throw new Error('Jev response is missing probabilities; no action executed.');
+  }
+  const entries = Object.entries(probabilities) as Array<[string, unknown]>;
+  if (entries.length === 0 || !entries.every(([k, v]) => allowed.includes(k) && unit(v))) {
+    throw new Error('Jev probabilities contain unknown candidates or invalid values; no action executed.');
+  }
+  const dist = probabilities as Record<string, number>;
+  if (!(choice in dist)) {
+    throw new Error(`Jev chose "${choice}" without assigning it a probability; no action executed.`);
+  }
+  const sum = entries.reduce((acc, [, v]) => acc + (v as number), 0);
+  if (Math.abs(sum - 1) > 0.02) {
+    throw new Error('Jev probabilities do not sum to 1; no action executed.');
+  }
+  const max = Math.max(...Object.values(dist));
+  if (dist[choice] < max - 1e-6) {
+    throw new Error(`Jev chose "${choice}" but a different candidate has higher probability; no action executed.`);
   }
 
   return {
     choice,
-    confidence:
-      typeof answer.confidence === 'number'
-        ? answer.confidence
-        : typeof probabilities[choice] === 'number'
-        ? probabilities[choice]
-        : 1.0,
-    probabilities: answer.probabilities || { [choice]: 1.0 },
+    confidence: unit(answer.confidence) ? answer.confidence : dist[choice],
+    probabilities: dist,
   };
 }

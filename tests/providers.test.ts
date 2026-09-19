@@ -5,8 +5,7 @@ import { callOpenRouter } from '../src/shared/providers/openrouter';
 import { callTypeSafe } from '../src/shared/providers/typesafe';
 import { AppSettings, DEFAULT_SETTINGS, JevRequest } from '../src/shared/types';
 
-describe('Jev Provider Adapters', () => {
-  const dummyRequest: JevRequest = {
+const dummyRequest: JevRequest = {
     model: 'jev-latest',
     state: {
       page: {
@@ -29,8 +28,9 @@ describe('Jev Provider Adapters', () => {
         },
       },
     },
-  };
+};
 
+describe('Jev Provider Adapters', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
   });
@@ -178,5 +178,40 @@ describe('Jev Provider Adapters', () => {
 
     const [url] = (global.fetch as any).mock.calls[0];
     expect(url).toBe('https://openrouter.ai/api/alpha/decisions');
+  });
+});
+
+describe('postJson retry policy', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('retries transient statuses with backoff and then succeeds', async () => {
+    (global.fetch as any)
+      .mockResolvedValueOnce({ ok: false, status: 429, text: async () => 'slow down' })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ model: 'm', answers: {} }) });
+
+    const pending = callTypeSafe(
+      { apiKey: 'k', model: 'jev-latest', endpoint: 'https://api.typesafe.ai/v1/systemone' },
+      dummyRequest
+    );
+    await vi.advanceTimersByTimeAsync(600);
+    const res = await pending;
+    expect(res.model).toBe('m');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry non-transient errors and reports the status', async () => {
+    (global.fetch as any).mockResolvedValueOnce({ ok: false, status: 400, text: async () => 'bad request' });
+    await expect(
+      callOpenRouter({ apiKey: 'k', model: '', endpoint: '' }, dummyRequest)
+    ).rejects.toThrow(/HTTP 400.*bad request/);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 });

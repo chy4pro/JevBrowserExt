@@ -1,7 +1,8 @@
 import { buildJevRequest, validateChoiceAnswer } from '../shared/action-space';
-import { callJevProvider } from '../shared/providers';
+import { activeJevModel, callJevProvider } from '../shared/providers';
 import { createFieldContext, generateFieldText } from '../shared/text-helper';
 import {
+  ActResult,
   AgentProgress,
   AgentStepLog,
   AppSettings,
@@ -11,399 +12,382 @@ import {
   RecentAction,
 } from '../shared/types';
 
-function computePageFingerprint(snapshot: PageSnapshot): string {
-  const inputValues = snapshot.actions
-    .filter((a) => a.kind === 'fill' || a.value)
-    .map((a) => `${a.id}:${a.value || ''}`)
-    .join('|');
-  return `${snapshot.url}##${Math.round(snapshot.scroll.y)}##${snapshot.actions.length}##${inputValues}##${snapshot.text.slice(0, 500)}`;
+/** Semantic fingerprint of an observation: URL, scroll, visible text and the element table. */
+export function computePageFingerprint(snapshot: PageSnapshot): string {
+  const semantics = snapshot.actions.map(({ rect, ...a }) => a);
+  return JSON.stringify([snapshot.url, Math.round(snapshot.scroll.y), snapshot.text, semantics]);
 }
+
+/** Errors from a tab that navigated away while a message was in flight. */
+function isNavigationError(message: string): boolean {
+  return (
+    message.includes('back/forward cache') ||
+    message.includes('message channel is closed') ||
+    message.includes('message port closed') ||
+    message.includes('Receiving end does not exist') ||
+    message.includes('Frame was removed')
+  );
+}
+
+const INTERNAL_PREFIXES = ['chrome://', 'chrome-extension://', 'edge://', 'about:', 'view-source:', 'devtools://'];
+
+const MAX_CONSECUTIVE_STALE = 3;
+const DEADLOCK_RUN = 3;
 
 export class AgentRunner {
   private progress: AgentProgress = {
     status: 'idle',
     goal: '',
     currentStep: 0,
-    maxSteps: 30,
+    maxSteps: DEFAULT_SETTINGS.maxSteps,
     logs: [],
   };
 
-  private isAborted = false;
-  private isSingleStep = false;
   private settings: AppSettings = DEFAULT_SETTINGS;
   private history: RecentAction[] = [];
   private activeTabId: number | null = null;
+  private runToken = 0;
 
-  // Adaptive Loop & Deadlock Prevention
   private lastFingerprint: string | null = null;
-  private consecutiveNoChangeCount = 0;
+  private consecutiveStale = 0;
+  private decisionCount = 0;
   private targetFailureCount = new Map<string, number>();
   private lastTargetActionId: string | null = null;
+  /** Text generated for a decision that turned out stale; reused only for an identical helper input. */
+  private pendingText: { key: string; text: string } | null = null;
 
   public setSettings(settings: AppSettings): void {
     this.settings = settings;
-    if (this.settings.openrouter?.model === 'typesafe/jev-latest') {
-      this.settings.openrouter.model = 'typesafe/jev-1.13';
+    if (this.progress.status !== 'running') {
+      this.progress.maxSteps = settings.maxSteps || DEFAULT_SETTINGS.maxSteps;
     }
-    this.progress.maxSteps = settings.maxSteps || 30;
   }
 
   public getProgress(): AgentProgress {
     return this.progress;
   }
 
-  public async start(goal: string, tabId: number): Promise<void> {
-    if (this.progress.status === 'running') {
-      return;
-    }
-
-    this.isAborted = false;
-    this.isSingleStep = false;
+  private reset(goal: string, tabId: number): void {
+    this.runToken++;
     this.activeTabId = tabId;
     this.history = [];
     this.lastFingerprint = null;
-    this.consecutiveNoChangeCount = 0;
+    this.consecutiveStale = 0;
+    this.decisionCount = 0;
     this.targetFailureCount.clear();
     this.lastTargetActionId = null;
-
+    this.pendingText = null;
     this.progress = {
       status: 'running',
       goal,
       currentStep: 0,
-      maxSteps: this.settings.maxSteps || 30,
+      maxSteps: this.settings.maxSteps || DEFAULT_SETTINGS.maxSteps,
       logs: [],
     };
-
-    this.broadcastUpdate();
-    await this.loop();
   }
 
-  public async step(goal: string, tabId: number): Promise<void> {
-    this.isAborted = false;
-    this.isSingleStep = true;
-    this.activeTabId = tabId;
-    this.progress.status = 'running';
-    this.progress.goal = goal;
+  public async start(goal: string, tabId: number): Promise<void> {
+    if (this.progress.status === 'running') return;
+    this.reset(goal, tabId);
     this.broadcastUpdate();
+    await this.loop(this.runToken);
+  }
 
-    await this.executeOneStep();
+  /** Executes exactly one step. A new goal, or a finished run, starts over; a paused run continues. */
+  public async step(goal: string, tabId: number): Promise<void> {
+    if (this.progress.status === 'running') return;
+    const continuing = this.progress.status === 'paused' && goal === this.progress.goal && tabId === this.activeTabId;
+    if (!continuing) {
+      this.reset(goal, tabId);
+    } else {
+      this.runToken++;
+      this.progress.status = 'running';
+    }
+    const token = this.runToken;
 
-    if (this.progress.status === 'running') {
-      this.progress.status = 'paused';
+    if (this.progress.currentStep >= this.progress.maxSteps) {
+      this.finish('blocked', `Reached the ${this.progress.maxSteps}-step budget.`);
+      return;
+    }
+
+    this.broadcastUpdate();
+    const cont = await this.executeOneStep(token);
+    if (token === this.runToken && this.progress.status === 'running') {
+      this.progress.status = cont ? 'paused' : 'idle';
     }
     this.broadcastUpdate();
   }
 
   public stop(): void {
-    this.isAborted = true;
-    this.progress.status = 'idle';
+    this.runToken++;
+    if (this.progress.status === 'running' || this.progress.status === 'paused') {
+      this.progress.status = 'idle';
+    }
     this.broadcastUpdate();
+    this.sendStatus({ clear: true });
   }
 
-  private async loop(): Promise<void> {
-    while (!this.isAborted && this.progress.status === 'running') {
+  private async loop(token: number): Promise<void> {
+    while (token === this.runToken && this.progress.status === 'running') {
       if (this.progress.currentStep >= this.progress.maxSteps) {
-        this.progress.status = 'done';
-        this.broadcastUpdate();
+        this.finish('blocked', `Reached the ${this.progress.maxSteps}-step budget without DONE.`);
         break;
       }
-
-      const continueLoop = await this.executeOneStep();
-      if (!continueLoop) break;
-
+      const cont = await this.executeOneStep(token);
+      if (!cont) break;
       if (this.settings.stepDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, this.settings.stepDelayMs));
       }
     }
   }
 
-  /**
-   * Waits for a tab to finish loading after a navigation event.
-   */
+  /** Resolves when the tab finishes loading, or after a timeout. */
   private async waitForTabToLoad(tabId: number, timeoutMs = 8000): Promise<void> {
     await new Promise<void>((resolve) => {
-      let isDone = false;
-
+      let done = false;
       const finish = () => {
-        if (!isDone) {
-          isDone = true;
-          chrome.tabs.onUpdated.removeListener(listener);
-          resolve();
-        }
+        if (done) return;
+        done = true;
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
       };
-
-      const listener = (updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
-        if (updatedTabId === tabId && changeInfo.status === 'complete') {
-          finish();
-        }
+      const listener = (updatedTabId: number, changeInfo: chrome.tabs.OnUpdatedInfo) => {
+        if (updatedTabId === tabId && changeInfo.status === 'complete') finish();
       };
-
       chrome.tabs.onUpdated.addListener(listener);
-
-      // Check current tab state right away
-      chrome.tabs.get(tabId).then((tab) => {
-        if (tab.status === 'complete') {
-          setTimeout(finish, 400);
-        }
-      }).catch(() => finish());
-
+      chrome.tabs
+        .get(tabId)
+        .then((tab) => {
+          if (tab.status === 'complete') finish();
+        })
+        .catch(() => finish());
       setTimeout(finish, timeoutMs);
     });
-
-    // Small delay after page load for DOM stabilization
-    await new Promise((r) => setTimeout(r, 400));
+    // Let the new document run its first frames before observing.
+    await new Promise((r) => setTimeout(r, 150));
   }
 
-  /**
-   * Ensures the content script is running in the tab, injecting it dynamically if needed.
-   */
+  /** Makes sure a single content script instance is listening in the tab. */
   private async ensureContentScriptReady(tabId: number): Promise<void> {
     const tab = await chrome.tabs.get(tabId);
     const url = tab.url || '';
-
-    if (
-      url.startsWith('chrome://') ||
-      url.startsWith('chrome-extension://') ||
-      url.startsWith('edge://') ||
-      url.startsWith('about:') ||
-      url.startsWith('view-source:')
-    ) {
+    if (INTERNAL_PREFIXES.some((p) => url.startsWith(p))) {
       throw new Error(
-        `Cannot run on internal browser page (${url}). Please open a real web page (e.g. google.com or wikipedia.org) and try again.`
+        `Cannot run on internal browser page (${url}). Open a regular web page and try again.`
       );
     }
-
+    if (tab.status === 'loading') {
+      await this.waitForTabToLoad(tabId);
+    }
     try {
       await chrome.tabs.sendMessage(tabId, { type: 'PING' });
     } catch {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['content.js'],
-      });
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // The content script guards against double registration, so injecting is safe.
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 
-  private async executeOneStep(): Promise<boolean> {
-    if (!this.activeTabId) {
-      this.finishWithError('No active tab identified');
+  /**
+   * One observe → decide → act cycle. Returns false when the run has ended.
+   * A stale decision is discarded and the page is observed again without recording a step.
+   */
+  private async executeOneStep(token: number): Promise<boolean> {
+    const tabId = this.activeTabId;
+    if (tabId === null) {
+      this.finish('error', 'No active tab identified');
       return false;
     }
 
-    this.progress.currentStep++;
-    this.broadcastUpdate();
-
-    // 1. Ensure content script is injected and observe the page
+    // 1. Observe
     let snapshot: PageSnapshot;
     try {
-      await this.ensureContentScriptReady(this.activeTabId);
-
-      const response = await chrome.tabs.sendMessage(this.activeTabId, {
-        type: 'CONTENT_OBSERVE',
-      });
-      if (!response || !response.success || !response.snapshot) {
+      await this.ensureContentScriptReady(tabId);
+      const response = await chrome.tabs.sendMessage(tabId, { type: 'CONTENT_OBSERVE' });
+      if (!response?.success || !response.snapshot) {
         throw new Error(response?.error || 'Failed to capture page DOM snapshot');
       }
       snapshot = response.snapshot;
     } catch (err: any) {
-      this.finishWithError(`Observe failed: ${err.message || String(err)}`);
+      this.finish('error', `Observe failed: ${err?.message || String(err)}`);
       return false;
     }
+    if (token !== this.runToken) return false;
 
-    // 2. Real Fingerprint & Loop Detection
-    const currentFingerprint = computePageFingerprint(snapshot);
-    if (this.lastFingerprint !== null && this.history.length > 0) {
-      const pageChanged = currentFingerprint !== this.lastFingerprint;
-      this.history[this.history.length - 1].page_changed = pageChanged;
-
-      if (!pageChanged) {
-        this.consecutiveNoChangeCount++;
-        if (this.lastTargetActionId) {
-          const count = (this.targetFailureCount.get(this.lastTargetActionId) || 0) + 1;
-          this.targetFailureCount.set(this.lastTargetActionId, count);
-        }
-      } else {
-        this.consecutiveNoChangeCount = 0;
+    // 2. Resolve page_changed for the previous action and detect deadlocks
+    const fingerprint = computePageFingerprint(snapshot);
+    const last = this.history[this.history.length - 1];
+    if (last && last.page_changed === undefined && this.lastFingerprint !== null) {
+      last.page_changed = fingerprint !== this.lastFingerprint;
+      if (!last.page_changed && this.lastTargetActionId && last.kind !== 'wait') {
+        const count = (this.targetFailureCount.get(this.lastTargetActionId) || 0) + 1;
+        this.targetFailureCount.set(this.lastTargetActionId, count);
+      } else if (last.page_changed) {
         this.targetFailureCount.clear();
       }
     }
-    this.lastFingerprint = currentFingerprint;
+    this.lastFingerprint = fingerprint;
 
-    // Detect hard deadlock (e.g. 4 consecutive actions without any page change)
-    if (this.consecutiveNoChangeCount >= 4) {
-      this.progress.status = 'blocked';
-      this.finishWithError(
-        `Agent detected deadlock: 4 consecutive actions produced no change on the page. Please inspect or adjust the goal.`
+    const recent = this.history.slice(-DEADLOCK_RUN);
+    if (
+      recent.length === DEADLOCK_RUN &&
+      recent.every((h) => h.page_changed === false && h.kind !== 'wait')
+    ) {
+      this.finish(
+        'blocked',
+        `${DEADLOCK_RUN} consecutive actions produced no change on the page. Inspect the page or adjust the goal.`
       );
       return false;
     }
 
-    // 3. Prepare Loop Warning & Suppressed Targets
+    // 3. Loop feedback for the model
     let warning: string | undefined;
-    const suppressedTargetIds: string[] = [];
-
-    if (this.consecutiveNoChangeCount >= 1 && this.history.length > 0) {
-      const lastAction = this.history[this.history.length - 1];
-      warning = `ATTENTION: Previous action "${lastAction.action}" resulted in NO visible change on the page. Do NOT repeat the exact same action. Try an alternative target, scroll, or submit button.`;
+    if (last && last.page_changed === false && last.kind !== 'wait') {
+      warning = `ATTENTION: Previous action "${last.action}" resulted in NO visible change on the page. Do NOT repeat the exact same action. Try an alternative target, scroll, or submit button.`;
     }
+    const suppressedTargetIds = Array.from(this.targetFailureCount.entries())
+      .filter(([, count]) => count >= 2)
+      .map(([id]) => id);
 
-    for (const [targetId, failCount] of this.targetFailureCount.entries()) {
-      if (failCount >= 2) {
-        suppressedTargetIds.push(targetId);
-      }
+    // 4. Decide
+    if (this.decisionCount >= this.progress.maxSteps * 2) {
+      this.finish('blocked', 'Reached the model-call budget for this run.');
+      return false;
     }
-
-    // 4. Formulate Jev Action Space and Questions
-    let model =
-      this.settings.activeProvider === 'typesafe'
-        ? this.settings.typesafe.model
-        : this.settings.activeProvider === 'openrouter'
-        ? this.settings.openrouter.model
-        : this.settings.cloudflare.model;
-
-    if (this.settings.activeProvider === 'openrouter' && (model === 'typesafe/jev-latest' || !model)) {
-      model = 'typesafe/jev-1.13';
-    }
-
     const { request, actionSpace } = buildJevRequest(
-      model,
+      activeJevModel(this.settings),
       snapshot,
       this.progress.goal,
       this.history,
       { warning, suppressedTargetIds }
     );
 
-    // 5. Query Jev
     const started = Date.now();
     let jevResponse;
     try {
+      this.decisionCount++;
       jevResponse = await callJevProvider(this.settings, request);
     } catch (err: any) {
-      this.finishWithError(`Jev decision failed: ${err.message || String(err)}`);
+      this.finish('error', `Jev decision failed: ${err?.message || String(err)}`);
       return false;
     }
     const latencyMs = Date.now() - started;
+    if (token !== this.runToken) return false;
 
-    // 6. Validate Operation Decision
     let operationAnswer;
     try {
-      operationAnswer = validateChoiceAnswer(
-        jevResponse.answers?.operation,
-        actionSpace.operations
-      );
+      operationAnswer = validateChoiceAnswer(jevResponse.answers?.operation, actionSpace.operations);
     } catch (err: any) {
-      this.finishWithError(`Invalid operation choice: ${err.message || String(err)}`);
+      this.finish('error', `Invalid operation choice: ${err?.message || String(err)}`);
       return false;
     }
-
     const operation = operationAnswer.choice;
+    const provider = this.settings.activeProvider;
 
-    if (operation === 'DONE') {
-      this.progress.status = 'done';
+    if (operation === 'DONE' || operation === 'BLOCKED') {
       this.addLog({
         step: this.progress.currentStep,
         timestamp: Date.now(),
-        operation: 'DONE',
+        operation,
         confidence: operationAnswer.confidence,
         latencyMs,
-        provider: this.settings.activeProvider,
+        provider,
         probabilities: operationAnswer.probabilities,
       });
-      this.broadcastUpdate();
+      this.finish(operation === 'DONE' ? 'done' : 'blocked');
+      this.sendStatus({ text: operation === 'DONE' ? 'Done' : 'Blocked', latencyMs });
       return false;
     }
 
-    if (operation === 'BLOCKED') {
-      this.progress.status = 'blocked';
-      this.addLog({
-        step: this.progress.currentStep,
-        timestamp: Date.now(),
-        operation: 'BLOCKED',
-        confidence: operationAnswer.confidence,
-        latencyMs,
-        provider: this.settings.activeProvider,
-        probabilities: operationAnswer.probabilities,
-      });
-      this.broadcastUpdate();
-      return false;
-    }
-
-    // 7. Resolve Target Element and Actions
+    // 5. Resolve the target from the selected operation's head only
     let targetAction: PageAction | undefined;
-    let targetConfidence: number | undefined;
-
+    let targetConfidence = operationAnswer.confidence;
     if (operation in actionSpace.targets) {
-      const targetHead = `${operation.toLowerCase()}_target`;
-      const targetAnswer = validateChoiceAnswer(
-        jevResponse.answers?.[targetHead],
-        actionSpace.targets[operation]
-      );
-      const targetIndex = targetAnswer.choice;
-      targetAction = actionSpace.targets[operation][targetIndex];
-      targetConfidence = targetAnswer.confidence;
-    } else if (operation in actionSpace.controls) {
-      targetAction = actionSpace.controls[operation];
-      targetConfidence = operationAnswer.confidence;
-    }
-
-    if (!targetAction) {
-      this.finishWithError(`Could not find target action for operation: ${operation}`);
-      return false;
-    }
-
-    this.lastTargetActionId = targetAction.id;
-
-    // 8. If TYPE_TEXT, call text helper
-    let generatedText: string | undefined;
-    if (operation === 'TYPE_TEXT') {
       try {
-        const fieldContext = createFieldContext(
-          this.progress.goal,
-          targetAction,
-          { title: snapshot.title, text: snapshot.text },
-          this.history
+        const targetAnswer = validateChoiceAnswer(
+          jevResponse.answers?.[`${operation.toLowerCase()}_target`],
+          actionSpace.targets[operation]
         );
-        generatedText = await generateFieldText(this.settings, fieldContext);
+        targetAction = actionSpace.targets[operation][targetAnswer.choice];
+        targetConfidence = targetAnswer.confidence;
       } catch (err: any) {
-        this.finishWithError(`Text helper failed: ${err.message || String(err)}`);
+        this.finish('error', `Invalid target choice: ${err?.message || String(err)}`);
         return false;
       }
+    } else if (operation in actionSpace.controls) {
+      targetAction = actionSpace.controls[operation];
+    }
+    if (!targetAction) {
+      this.finish('error', `Could not find target action for operation: ${operation}`);
+      return false;
     }
 
-    // 9. Execute on page via Content Script
+    // 6. TYPE_TEXT: the helper supplies the value; reuse it only for an identical input after a stale retry
+    let generatedText: string | undefined;
+    if (operation === 'TYPE_TEXT') {
+      const context = createFieldContext(
+        this.progress.goal,
+        targetAction,
+        { title: snapshot.title, text: snapshot.text },
+        this.history
+      );
+      const key = JSON.stringify(context);
+      if (this.pendingText && this.pendingText.key === key) {
+        generatedText = this.pendingText.text;
+      } else {
+        try {
+          generatedText = await generateFieldText(this.settings, context);
+        } catch (err: any) {
+          this.finish('error', `Text helper failed: ${err?.message || String(err)}`);
+          return false;
+        }
+        this.pendingText = { key, text: generatedText };
+      }
+      if (token !== this.runToken) return false;
+    }
+
+    // 7. Act (never retried)
+    this.sendStatus({ text: `${operation} ${targetAction.label}`.slice(0, 120), latencyMs });
+    let navigated = false;
     try {
-      const actResponse = await chrome.tabs.sendMessage(this.activeTabId, {
+      const actResponse: ActResult | undefined = await chrome.tabs.sendMessage(tabId, {
         type: 'CONTENT_ACT',
         action: targetAction,
         text: generatedText,
       });
-
-      if (!actResponse || !actResponse.success) {
+      if (actResponse?.stale) {
+        this.consecutiveStale++;
+        if (this.consecutiveStale >= MAX_CONSECUTIVE_STALE) {
+          this.finish('error', `Page kept changing before actions could run: ${actResponse.error || 'stale'}`);
+          return false;
+        }
+        this.broadcastUpdate();
+        return true; // observe again; nothing was executed
+      }
+      if (!actResponse?.success) {
         throw new Error(actResponse?.error || 'Content action returned failure');
       }
     } catch (err: any) {
-      const errMsg = err.message || String(err);
-      if (
-        errMsg.includes('back/forward cache') ||
-        errMsg.includes('message channel is closed') ||
-        errMsg.includes('Receiving end does not exist') ||
-        errMsg.includes('Frame was removed')
-      ) {
-        await this.waitForTabToLoad(this.activeTabId);
-      } else {
-        this.finishWithError(`Act execution failed: ${errMsg}`);
+      const message = err?.message || String(err);
+      if (!isNavigationError(message)) {
+        this.finish('error', `Act execution failed: ${message}`);
         return false;
       }
+      // The action ran and the page navigated before it could reply; the action still counts.
+      navigated = true;
     }
 
-    // 10. Record action history & step log
+    // 8. Record execution before observing again
+    this.consecutiveStale = 0;
+    this.pendingText = null;
+    this.lastTargetActionId = targetAction.id;
     this.history.push({
       action: `${operation} ${targetAction.label}`,
       kind: targetAction.kind,
       text: generatedText,
-      page_changed: undefined, // Will be resolved at start of next step
+      page_changed: undefined,
     });
-
+    this.progress.currentStep++;
     this.addLog({
       step: this.progress.currentStep,
       timestamp: Date.now(),
@@ -411,35 +395,55 @@ export class AgentRunner {
       targetId: targetAction.id,
       targetLabel: targetAction.label,
       targetValue: generatedText,
-      confidence: targetConfidence ?? operationAnswer.confidence,
+      confidence: targetConfidence,
       latencyMs,
-      provider: this.settings.activeProvider,
+      provider,
       probabilities: operationAnswer.probabilities,
     });
-
     this.broadcastUpdate();
+
+    if (navigated) {
+      await this.waitForTabToLoad(tabId);
+    }
     return true;
   }
 
   private addLog(log: AgentStepLog): void {
     this.progress.logs.unshift(log);
-    if (this.progress.logs.length > 50) {
-      this.progress.logs.pop();
-    }
+    if (this.progress.logs.length > 50) this.progress.logs.pop();
   }
 
-  private finishWithError(errMsg: string): void {
-    this.progress.status = 'error';
-    this.progress.lastError = errMsg;
+  private finish(status: 'done' | 'blocked' | 'error', message?: string): void {
+    this.progress.status = status;
+    if (message) {
+      this.progress.lastError = message;
+    } else {
+      delete this.progress.lastError;
+    }
     this.broadcastUpdate();
+    if (status !== 'done') this.sendStatus({ text: message || status });
   }
 
   private broadcastUpdate(): void {
-    chrome.runtime.sendMessage({
-      type: 'PROGRESS_UPDATE',
-      progress: this.progress,
-    }).catch(() => {
-      // Popup might be closed, ignore
-    });
+    try {
+      chrome.runtime
+        .sendMessage({ type: 'PROGRESS_UPDATE', progress: this.progress })
+        .catch(() => {
+          // Popup might be closed
+        });
+    } catch {
+      // No receiver available
+    }
+  }
+
+  private sendStatus(payload: { text?: string; latencyMs?: number; clear?: boolean }): void {
+    if (this.activeTabId === null) return;
+    try {
+      chrome.tabs.sendMessage(this.activeTabId, { type: 'CONTENT_STATUS', ...payload }).catch(() => {
+        // Tab may be navigating
+      });
+    } catch {
+      // Tab gone
+    }
   }
 }

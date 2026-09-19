@@ -1,13 +1,14 @@
 {
   "name": "jevbrowserext",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Jev Ultrafast System 1 Browser Agent Extension",
   "scripts": {
     "build": "vite build",
     "dev": "vite",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test && npm run build"
   },
   "keywords": [
     "jev",
@@ -19,7 +20,6 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "lucide-react": "^1.47.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

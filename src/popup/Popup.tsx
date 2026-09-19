@@ -4,7 +4,17 @@ import {
   AgentStepLog,
   AppSettings,
   DEFAULT_SETTINGS,
+  ExtensionMessage,
 } from '../shared/types';
+
+const STATUS_COLORS: Record<string, string> = {
+  running: '#10b981',
+  paused: '#f59e0b',
+  done: '#3b82f6',
+  blocked: '#f97316',
+  error: '#ef4444',
+  idle: '#9ca3af',
+};
 
 export const Popup: React.FC = () => {
   const [goal, setGoal] = useState('');
@@ -20,7 +30,7 @@ export const Popup: React.FC = () => {
 
   useEffect(() => {
     // 1. Get settings
-    chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (response) => {
+    chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (response?: { settings?: AppSettings }) => {
       if (response?.settings) {
         setSettings(response.settings);
         setShowBadges(response.settings.showOverlay ?? true);
@@ -28,7 +38,7 @@ export const Popup: React.FC = () => {
     });
 
     // 2. Get initial progress
-    chrome.runtime.sendMessage({ type: 'GET_PROGRESS' }, (response) => {
+    chrome.runtime.sendMessage({ type: 'GET_PROGRESS' }, (response?: { progress?: AgentProgress }) => {
       if (response?.progress) {
         setProgress(response.progress);
         if (response.progress.goal) {
@@ -38,7 +48,7 @@ export const Popup: React.FC = () => {
     });
 
     // 3. Listen for live updates
-    const listener = (msg: any) => {
+    const listener = (msg: ExtensionMessage) => {
       if (msg.type === 'PROGRESS_UPDATE' && msg.progress) {
         setProgress(msg.progress);
       }
@@ -54,7 +64,7 @@ export const Popup: React.FC = () => {
 
   const handleStep = () => {
     if (!goal.trim()) return;
-    chrome.runtime.sendMessage({ type: 'STEP_AGENT' });
+    chrome.runtime.sendMessage({ type: 'STEP_AGENT', goal: goal.trim() });
   };
 
   const handleStop = () => {
@@ -150,6 +160,7 @@ export const Popup: React.FC = () => {
               style={{ ...styles.btn, ...styles.btnSecondary }}
               disabled={!goal.trim()}
               onClick={handleStep}
+              title={progress.status === 'paused' ? 'Execute the next step' : 'Start and execute one step'}
             >
               ⏭ Step
             </button>
@@ -184,14 +195,7 @@ export const Popup: React.FC = () => {
             <span
               style={{
                 ...styles.dot,
-                backgroundColor:
-                  progress.status === 'running'
-                    ? '#10b981'
-                    : progress.status === 'done'
-                    ? '#3b82f6'
-                    : progress.status === 'error'
-                    ? '#ef4444'
-                    : '#9ca3af',
+                backgroundColor: STATUS_COLORS[progress.status] || '#9ca3af',
               }}
             />
             <span style={styles.statusText}>

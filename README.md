@@ -23,14 +23,18 @@
 - **🧠 Dual-Model Orchestration**:
   - **Jev (System 1)**: Rapidly decides navigation, clicks, element focus, and dropdown selection.
   - **Text Helper (System 2)**: Only invoked when a field needs text input (`TYPE_TEXT`). A lightweight text model (e.g. `deepseek/deepseek-chat` or `google/gemini-3.7-flash`) extracts or generates the exact value from the user's goal.
-- **🔄 Self-Healing & Deadlock Prevention**:
-  - Real page fingerprinting (`url`, `scroll`, `input_values`, `dom_text`) to track genuine `page_changed` state.
-  - Adaptive feedback alerts when an action produces no change.
-  - Automatic target suppression / candidate penalization to prevent infinite loops on stuck elements.
-  - Automatic `Enter` key trigger for search and form submissions.
+- **🛡️ Stale-Safe Execution**:
+  - Every decision is checked against the page it was made on (URL, viewport, form values, target state and nearby context) right before acting; a stale decision is discarded and the page is observed again. Nothing is ever executed twice.
+  - The executor re-checks visibility, enabled state, geometry and occlusion, clicks exactly once, and never presses Enter on the model's behalf — submitting or picking an autocomplete suggestion is the model's next decision.
+  - After each action the next observation waits for the page to react (two animation frames, or visible options for autocomplete fields).
+- **🔄 Loop Feedback & Deadlock Detection**:
+  - A semantic page fingerprint tracks genuine `page_changed` state for every action.
+  - The model is warned when its previous action changed nothing; a target that misses twice is removed from the candidates while alternatives remain.
+  - Three consecutive non-wait actions without any change stop the run as `BLOCKED`; a step budget and a model-call budget bound every run.
+  - Model answers are validated strictly (offered candidate, consistent probability distribution). An invalid answer stops the run instead of being "repaired".
 - **🎨 Interactive Visual Overlay**:
   - Real-time `[1]`, `[2]`, `[3]` badge overlays on interactive elements.
-  - Floating execution HUD displaying step progress, confidence, latency, and calibrated probabilities.
+  - Floating execution HUD on the page showing the current operation, target and decision latency.
   - Support for autonomous run (**▶ Run Ultrafast**) and interactive single-stepping (**⏭ Step**).
 
 ---
@@ -122,16 +126,19 @@ Select your active provider:
 
 ### 2. Text Helper Configuration
 Used only when Jev selects an input box to fill:
-- **Provider**: OpenRouter, DeepSeek, or OpenAI-compatible.
-- **Model**: `deepseek/deepseek-chat` or `google/gemini-3.7-flash`.
+- **Provider**: OpenRouter, DeepSeek, or OpenAI-compatible. Switching the provider fills in that provider's default Base URL and model (for example `deepseek/deepseek-chat` on OpenRouter, `deepseek-chat` on DeepSeek direct).
+- **API Key**: optional when the helper uses OpenRouter and an OpenRouter key is already configured.
 
 ---
 
 ## 🧪 Testing
 
-The repository includes complete test suites covering action space generation, provider adapters, text helper parsing, and loop detection:
+Unit tests cover action-space generation, strict answer validation, provider adapters and retry policy, text helper parsing, DOM snapshot classification, the in-page executor (single click, no synthetic Enter, stale and occlusion guards) and the agent loop (stale retries, deadlock detection, text-value caching, single-stepping, budgets). Tests never call paid APIs.
 
 ```bash
+# Type-check, unit tests and production build
+npm run check
+
 # Run all Vitest unit tests
 npm test
 
@@ -154,10 +161,10 @@ JevBrowserExt/
 │   │   ├── agent.ts        # Observation, decision, and loop breaker engine
 │   │   └── index.ts        # Extension runtime message router
 │   ├── content/            # Injected Webpage Scripts
-│   │   ├── snapshot.ts     # Atomic DOM element extractor (up to 250 elements)
-│   │   ├── executor.ts     # Synthetic DOM events (click, fill with prototype setter, select, Enter)
+│   │   ├── snapshot.ts     # Atomic DOM element extractor (up to 250 elements) + freshness guards
+│   │   ├── executor.ts     # Stale-safe execution (single click, fill via prototype setter, select)
 │   │   ├── overlay.ts      # Visual badges and status HUD
-│   │   └── index.ts        # Content script entry listener
+│   │   └── index.ts        # Content script entry listener (guarded against double injection)
 │   ├── popup/              # React Popup UI
 │   │   └── Popup.tsx       # Goal input, run/step/stop controls, step logs
 │   ├── options/            # React Options UI
@@ -167,16 +174,17 @@ JevBrowserExt/
 │       ├── prompts.ts      # System prompts & operation rules
 │       ├── text-helper.ts  # Fallback text generator for TYPE_TEXT
 │       ├── types.ts        # Core TypeScript interfaces & schemas
-│       └── providers/      # Adapters for TypeSafe, OpenRouter, Cloudflare
+│       └── providers/      # Adapters for TypeSafe, OpenRouter, Cloudflare (+ shared HTTP retry)
 ├── tests/                  # Vitest test suite
 │   ├── action-space.test.ts
+│   ├── agent.test.ts
+│   ├── executor.test.ts
 │   ├── providers.test.ts
 │   └── text-helper.test.ts
 ├── scripts/
 │   ├── generate_icons.js   # Icon generation script
 │   └── test_live_e2e.ts    # Live network integration test
-├── manifest.json           # Chrome MV3 manifest
-└── package.json
+└── package.json            # (the MV3 manifest lives in public/manifest.json)
 ```
 
 ---

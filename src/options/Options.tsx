@@ -1,5 +1,34 @@
 import React, { useEffect, useState } from 'react';
-import { AppSettings, DEFAULT_SETTINGS, JevProviderType } from '../shared/types';
+import { callJevProvider } from '../shared/providers';
+import {
+  AppSettings,
+  DEFAULT_SETTINGS,
+  JevProviderType,
+  JevRequest,
+  TEXT_HELPER_PRESETS,
+  TextHelperProvider,
+} from '../shared/types';
+
+/** A minimal, valid decision request used by the connection test. */
+const TEST_REQUEST: Omit<JevRequest, 'model'> = {
+  state: {
+    page: { url: 'https://example.com', title: 'Example', text: 'Example Domain' },
+    elements: [{ index: '1', label: 'More information', operations: ['CLICK'] }],
+    recent_actions: [],
+  },
+  questions: {
+    operation: {
+      type: 'choice',
+      criteria: { CLICK: 'Click more information', DONE: 'Done' },
+      instructions: 'Pick an operation',
+    },
+    click_target: {
+      type: 'choice',
+      criteria: { '1': { element: '[1] More information' } },
+      instructions: 'Which element to click?',
+    },
+  },
+};
 
 export const Options: React.FC = () => {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -8,7 +37,7 @@ export const Options: React.FC = () => {
   const [testingStatus, setTestingStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (res) => {
+    chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (res?: { settings?: AppSettings }) => {
       if (res?.settings) {
         setSettings(res.settings);
         setActiveTab(res.settings.activeProvider || 'openrouter');
@@ -29,78 +58,28 @@ export const Options: React.FC = () => {
   const handleTestConnection = async (provider: JevProviderType) => {
     setTestingStatus(`Testing ${provider.toUpperCase()} connection...`);
     try {
-      let endpoint = '';
-      let headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      let body: any = {};
-
-      const testState = {
-        page: { url: 'https://example.com', title: 'Example', text: 'Example Domain' },
-        elements: [
-          { index: '1', label: 'More information', operations: ['CLICK'] },
-        ],
-        recent_actions: [],
-      };
-
-      const testQuestions = {
-        operation: {
-          type: 'choice',
-          criteria: {
-            CLICK: 'Click more information',
-            DONE: 'Done',
-          },
-          instructions: 'Pick an operation',
-        },
-      };
-
-      if (provider === 'typesafe') {
-        if (!settings.typesafe.apiKey) throw new Error('API Key is missing');
-        endpoint = settings.typesafe.endpoint || 'https://api.typesafe.ai/v1/systemone';
-        headers['Authorization'] = `Bearer ${settings.typesafe.apiKey}`;
-        body = {
-          model: settings.typesafe.model || 'jev-latest',
-          state: testState,
-          questions: testQuestions,
-        };
-      } else if (provider === 'openrouter') {
-        if (!settings.openrouter.apiKey) throw new Error('API Key is missing');
-        endpoint = settings.openrouter.endpoint || 'https://openrouter.ai/api/alpha/decisions';
-        headers['Authorization'] = `Bearer ${settings.openrouter.apiKey}`;
-        body = {
-          model: settings.openrouter.model || 'typesafe/jev-1.13',
-          state: testState,
-          questions: testQuestions,
-        };
-      } else if (provider === 'cloudflare') {
-        if (!settings.cloudflare.accountId || !settings.cloudflare.apiToken) {
-          throw new Error('Account ID or API Token is missing');
-        }
-        endpoint = `https://api.cloudflare.com/client/v4/accounts/${settings.cloudflare.accountId}/ai/run`;
-        headers['Authorization'] = `Bearer ${settings.cloudflare.apiToken}`;
-        body = {
-          model: settings.cloudflare.model || 'typesafe/jev',
-          input: {
-            state: testState,
-            questions: testQuestions,
-          },
-        };
-      }
-
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text.slice(0, 150)}`);
-      }
-
-      const json = await res.json();
-      setTestingStatus(`✅ Success! Received response: ${JSON.stringify(json.answers || json).slice(0, 80)}...`);
+      const testSettings: AppSettings = { ...settings, activeProvider: provider };
+      const model =
+        provider === 'typesafe'
+          ? settings.typesafe.model
+          : provider === 'openrouter'
+          ? settings.openrouter.model
+          : settings.cloudflare.model;
+      const started = Date.now();
+      const res = await callJevProvider(testSettings, { model, ...TEST_REQUEST });
+      const summary = JSON.stringify(res.answers?.operation ?? res.answers ?? res).slice(0, 120);
+      setTestingStatus(`✅ Success in ${Date.now() - started}ms. operation → ${summary}`);
     } catch (err: any) {
-      setTestingStatus(`❌ Test failed: ${err.message || String(err)}`);
+      setTestingStatus(`❌ Test failed: ${err?.message || String(err)}`);
     }
+  };
+
+  const handleTextProviderChange = (provider: TextHelperProvider) => {
+    const preset = TEXT_HELPER_PRESETS[provider];
+    setSettings({
+      ...settings,
+      textHelper: { ...settings.textHelper, provider, baseUrl: preset.baseUrl, model: preset.model },
+    });
   };
 
   return (
@@ -315,6 +294,7 @@ export const Options: React.FC = () => {
           </label>
           <p style={styles.helpText}>
             When Jev selects an input box to fill, this lightweight LLM generates the text payload from the goal.
+            Changing the provider resets Base URL and Model to that provider's defaults.
           </p>
           <div style={styles.grid2}>
             <div style={styles.field}>
@@ -322,15 +302,7 @@ export const Options: React.FC = () => {
               <select
                 style={styles.input}
                 value={settings.textHelper.provider}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    textHelper: {
-                      ...settings.textHelper,
-                      provider: e.target.value as any,
-                    },
-                  })
-                }
+                onChange={(e) => handleTextProviderChange(e.target.value as TextHelperProvider)}
               >
                 <option value="openrouter">OpenRouter (Default)</option>
                 <option value="deepseek">DeepSeek</option>
