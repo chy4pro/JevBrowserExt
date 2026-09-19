@@ -1,5 +1,5 @@
 import { ActResult, PageAction } from '../shared/types';
-import { getCache, isFresh, isVisible } from './snapshot';
+import { clickRect, getCache, isFresh, isVisible, sameComponent } from './snapshot';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -65,14 +65,10 @@ function dispatchPointerSequence(el: Element, x: number, y: number): void {
  * a hover layer over a product card. Dialogs and page-wide overlays never qualify, so a
  * modal still blocks clicks on what lies beneath it.
  */
-function sameComponent(element: Element, hit: Element): boolean {
-  if (hit.closest('dialog,[role="dialog"],[aria-modal="true"]')) return false;
-  let ancestor: Element | null = element.parentElement;
-  while (ancestor && !ancestor.contains(hit)) ancestor = ancestor.parentElement;
-  if (!ancestor || ancestor === document.body || ancestor === document.documentElement) return false;
-  if (['MAIN', 'HEADER', 'NAV', 'FOOTER', 'SECTION'].includes(ancestor.tagName)) return false;
-  const r = ancestor.getBoundingClientRect();
-  return r.height < window.innerHeight * 0.6 && r.width < window.innerWidth * 0.9;
+/** Short description of an element for diagnostics: tag, id and up to three classes. */
+function describeElement(e: Element): string {
+  const cls = typeof e.className === 'string' ? e.className.trim().split(/\s+/).filter(Boolean).slice(0, 3) : [];
+  return `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''}${cls.length ? '.' + cls.join('.') : ''}`;
 }
 
 function clickableAt(element: HTMLElement, hit: Element | null): HTMLElement {
@@ -154,7 +150,7 @@ export async function executeAction(action: PageAction, text?: string): Promise<
       }
     }
 
-    const r = element.getBoundingClientRect();
+    const r = clickRect(element);
     const x = r.x + r.width / 2;
     const y = r.y + r.height / 2;
     if (!r.width || !r.height || x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
@@ -162,7 +158,7 @@ export async function executeAction(action: PageAction, text?: string): Promise<
     }
     const hit = document.elementFromPoint(x, y);
     if (hit && !element.contains(hit) && !hit.contains(element) && !sameComponent(element, hit)) {
-      return stale('Target is covered by another element. Observe again.');
+      return stale(`Target is covered by another element (${describeElement(hit)}). Observe again.`);
     }
 
     if (action.kind === 'select') {

@@ -12,7 +12,7 @@ export async function postJson(
   body: unknown,
   options: { retries?: number; label?: string } = {}
 ): Promise<any> {
-  const retries = options.retries ?? 2;
+  const retries = options.retries ?? 3;
   const label = options.label || 'Model provider';
 
   for (let attempt = 0; ; attempt++) {
@@ -28,7 +28,7 @@ export async function postJson(
     }
 
     if (TRANSIENT_STATUSES.has(response.status) && attempt < retries) {
-      await sleep(500 * 2 ** attempt);
+      await sleep(800 * 2 ** attempt); // 0.8 s, 1.6 s, 3.2 s: shared text-model routes rate-limit briefly
       continue;
     }
 

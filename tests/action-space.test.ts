@@ -3,7 +3,7 @@ import { buildActionSpace, buildJevRequest, validateChoiceAnswer } from '../src/
 import { PageAction, PageSnapshot } from '../src/shared/types';
 
 const sampleActions: PageAction[] = [
-  { id: 'e1', node: 101, kind: 'click', role: 'button', label: 'Search Flights' },
+  { id: 'e1', node: 101, kind: 'click', role: 'button', label: 'Search Flights', section: 'Flights' },
   { id: 'e2', node: 102, kind: 'fill', role: 'textbox', label: 'Departure City', value: '' },
   { id: 'e3', node: 102, kind: 'click', role: 'textbox', label: 'Open Departure City', value: '' },
   {
@@ -33,6 +33,8 @@ describe('buildActionSpace', () => {
     const space = buildActionSpace(sampleActions, 'Fly from Zurich to London');
 
     expect(space.elements.map((e) => e.index)).toEqual(['1', '2', '3']);
+    expect(space.elements[0].section).toBe('Flights');
+    expect((space.questions.click_target.criteria as any)['1'].section).toBe('Flights');
     expect(space.elements[1].operations).toEqual(['TYPE_TEXT', 'CLICK']);
     expect(Object.keys(space.targets.CLICK)).toEqual(['1', '2']);
     expect(Object.keys(space.targets.TYPE_TEXT)).toEqual(['2']);
@@ -104,10 +106,14 @@ describe('buildJevRequest', () => {
     expect(request.model).toBe('jev-latest');
     expect(request.state.page.title).toBe('Google Flights');
     expect(request.state.elements.length).toBe(actionSpace.elements.length);
+    expect(request.state.task).toBe('Search flights');
     expect(request.state.recent_actions).toEqual([
-      { action: 'CLICK button', kind: 'click', text: undefined, page_changed: false },
+      { step: undefined, action: 'CLICK button', kind: 'click', text: undefined, outcome: 'pending', url: undefined, page_changed: false },
     ]);
     expect(request.questions.operation).toBeDefined();
+    expect(request.questions.goal_done.type).toBe('noul');
+    expect(request.questions.stuck.type).toBe('noul');
+    expect((request.questions.operation.instructions as any).rules).toMatch(/`recent_actions`/);
   });
 });
 
@@ -143,7 +149,9 @@ describe('validateChoiceAnswer', () => {
     ).toThrow(/sum to 1/);
     expect(() =>
       validateChoiceAnswer({ choice: 'CLICK', probabilities: { CLICK: 0.2, DONE: 0.8 } }, allowed)
-    ).toThrow(/higher probability/);
+    ).toThrow(/higher probability \(DONE=0.8, CLICK=0.2\)/);
+    // Two-decimal rounding by the provider is not a contradiction.
+    expect(validateChoiceAnswer({ choice: 'CLICK', probabilities: { CLICK: 0.49, DONE: 0.5, TYPE_TEXT: 0.01 } }, allowed).choice).toBe('CLICK');
     expect(() =>
       validateChoiceAnswer({ choice: 'CLICK', probabilities: { CLICK: 'high' } }, allowed)
     ).toThrow();

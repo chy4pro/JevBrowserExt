@@ -7,9 +7,13 @@ import { PageAction } from '../src/shared/types';
 /** jsdom has no layout: give every element a real-looking rect and treat it as visible. */
 function fakeLayout(): void {
   let n = 0;
+  const rects = new WeakMap<Element, DOMRect>();
   Element.prototype.getBoundingClientRect = function () {
-    const top = 10 + (n++ % 30) * 24;
-    return { x: 10, y: top, top, left: 10, width: 200, height: 20, right: 210, bottom: top + 20, toJSON() {} } as DOMRect;
+    if (!rects.has(this)) {
+      const top = 10 + (n++ % 30) * 24;
+      rects.set(this, { x: 10, y: top, top, left: 10, width: 200, height: 20, right: 210, bottom: top + 20, toJSON() {} } as DOMRect);
+    }
+    return rects.get(this)!;
   };
   (Element.prototype as any).checkVisibility = () => true;
   Range.prototype.getBoundingClientRect = () =>
@@ -255,5 +259,74 @@ describe('covers inside one component', () => {
     const res = await executeAction(actionFor(snapshot.actions, (a) => a.label === 'Buy'));
     expect(res.stale).toBe(true);
     expect(clicks).toBe(0);
+  });
+});
+
+describe('element context', () => {
+  beforeEach(() => {
+    delete (window as any).__jevFast;
+    fakeLayout();
+  });
+
+  it('records the heading above each control and the target of each link', () => {
+    document.body.innerHTML =
+      '<h2>Search results</h2><a href="/abs/1706.03762">Attention Is All You Need</a>' +
+      '<h2>Related</h2><a href="https://other.example/x?y=1#z">Elsewhere</a><button>Go</button>';
+    const snapshot = takeSnapshot()!;
+    const first = snapshot.actions.find((a) => a.label === 'Attention Is All You Need')!;
+    expect(first.section).toBe('Search results');
+    expect(first.href).toBe('/abs/1706.03762');
+    const other = snapshot.actions.find((a) => a.label === 'Elsewhere')!;
+    expect(other.section).toBe('Related');
+    expect(other.href).toBe('other.example/x?y=1#z');
+    expect(snapshot.actions.find((a) => a.label === 'Go')!.href).toBeUndefined();
+  });
+});
+
+describe('wrapped inline links', () => {
+  beforeEach(() => {
+    delete (window as any).__jevFast;
+    fakeLayout();
+  });
+
+  it('clicks the first rendered line of a link that wraps, not the centre of its union box', async () => {
+    document.body.innerHTML = '<ul><li><a id="p" href="#prod">Apple Cinema 30\"</a></li><li id="next">next row</li></ul>';
+    const link = document.getElementById('p')!;
+    const frag = (x: number, y: number, w: number, h: number) => ({ x, y, top: y, left: x, width: w, height: h, right: x + w, bottom: y + h, toJSON() {} } as DOMRect);
+    // Two line fragments; the union box centre (y=160) falls on the next row.
+    (link as any).getClientRects = () => [frag(10, 100, 120, 20), frag(10, 200, 60, 20)];
+    (link as any).getBoundingClientRect = () => frag(10, 100, 120, 120);
+    (document as any).elementFromPoint = (_x: number, y: number) => (y < 130 ? link : document.getElementById('next'));
+    let clicks = 0;
+    link.addEventListener('click', (e) => { clicks++; e.preventDefault(); });
+    const snapshot = takeSnapshot()!;
+    const res = await executeAction(actionFor(snapshot.actions, (a) => a.label.startsWith('Apple')));
+    expect(res).toEqual({ success: true });
+    expect(clicks).toBe(1);
+  });
+});
+
+describe('covered elements are not observed', () => {
+  beforeEach(() => {
+    delete (window as any).__jevFast;
+    fakeLayout();
+  });
+
+  it('drops a control that sits under another block, keeps one under its own card\'s hover layer', () => {
+    document.body.innerHTML =
+      '<main><div id="old"><a id="stale" href="#a">Apple Cinema 30"</a></div><div id="new"><a id="fresh" href="#b">Canon EOS</a></div></main>' +
+      '<ul><li id="card"><a id="p" href="#c">HP LP3065</a><div id="hover"></div></li></ul>';
+    (document as any).elementFromPoint = (_x: number, y: number) => {
+      // The stale link is under the new list; the card link is under its own hover layer.
+      const stale = document.getElementById('stale')!.getBoundingClientRect();
+      if (Math.abs(y - (stale.top + stale.height / 2)) < 1) return document.getElementById('new');
+      const p = document.getElementById('p')!.getBoundingClientRect();
+      if (Math.abs(y - (p.top + p.height / 2)) < 1) return document.getElementById('hover');
+      return null;
+    };
+    const labels = takeSnapshot()!.actions.map((a) => a.label);
+    expect(labels).not.toContain('Apple Cinema 30"');
+    expect(labels).toContain('Canon EOS');
+    expect(labels).toContain('HP LP3065');
   });
 });

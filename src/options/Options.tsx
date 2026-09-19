@@ -13,6 +13,7 @@ import {
 /** A minimal, valid decision request used by the connection test. */
 const TEST_REQUEST: Omit<JevRequest, 'model'> = {
   state: {
+    task: 'Connection test',
     page: { url: 'https://example.com', title: 'Example', text: 'Example Domain' },
     elements: [{ index: '1', label: 'More information', operations: ['CLICK'] }],
     recent_actions: [],

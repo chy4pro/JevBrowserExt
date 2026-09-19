@@ -152,6 +152,10 @@ export interface ObservedElement {
   index: string;
   label: string;
   role?: string;
+  /** Link destination (path and query only) so the model can tell similar links apart. */
+  href?: string;
+  /** Nearest heading above the element; where on the page it sits. */
+  section?: string;
   value?: string;
   operations: string[];
   checked?: string;
@@ -161,13 +165,25 @@ export interface ObservedElement {
 }
 
 export interface RecentAction {
+  step?: number;
   action?: string;
   kind?: string;
   text?: string;
   page_changed?: boolean;
+  /** What visibly happened after the action, in words: navigated, page changed, scrolled, no change. */
+  outcome?: string;
+  /** URL after the action. */
+  url?: string;
+}
+
+export interface RunProgressState {
+  start_url: string;
+  steps_taken: number;
+  visited_urls: string[];
 }
 
 export interface JevState {
+  task: string;
   page: {
     url: string;
     title: string;
@@ -175,6 +191,7 @@ export interface JevState {
   };
   elements: ObservedElement[];
   recent_actions: RecentAction[];
+  run?: RunProgressState;
 }
 
 export interface JevRequest {
@@ -227,6 +244,8 @@ export interface PageAction {
   kind: ActionKind;
   role?: string;
   label: string;
+  href?: string;
+  section?: string;
   value?: string;
   current_value?: string;
   delta?: number;
@@ -267,6 +286,9 @@ export interface AgentStepLog {
   latencyMs: number;
   provider: JevProviderType;
   probabilities?: Record<string, number>;
+  /** Independent cross-checks answered in the same request (0..1). */
+  goalDone?: number;
+  stuck?: number;
   error?: string;
 }
 

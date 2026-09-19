@@ -76,7 +76,7 @@ async function launch(log: Log): Promise<{ context: BrowserContext; sw: Worker; 
     executablePath: process.env.CHROMIUM_PATH || undefined,
     headless: true,
     viewport: { width: 1280, height: 800 },
-    locale: 'en-US',
+    locale: process.env.E2E_LOCALE || 'en-US',
     args: [`--disable-extensions-except=${DIST}`, `--load-extension=${DIST}`, '--no-sandbox', '--disable-gpu'],
   });
   let [sw] = context.serviceWorkers();
@@ -140,7 +140,7 @@ async function runTask(context: BrowserContext, sw: Worker, extId: string, task:
       for (const e of entries.slice(seen)) {
         const line =
           `${e.operation}${e.targetLabel ? ` → ${e.targetLabel.slice(0, 60)}` : ''}${e.targetValue ? ` "${e.targetValue}"` : ''}` +
-          ` (${Math.round((e.confidence ?? 0) * 100)}%, ${e.latencyMs}ms)`;
+          ` (${Math.round((e.confidence ?? 0) * 100)}%, ${e.latencyMs}ms${e.goalDone !== undefined ? `, goal ${Math.round(e.goalDone * 100)}%` : ''}${e.stuck !== undefined ? `, stuck ${Math.round(e.stuck * 100)}%` : ''})`;
         trace.push(line);
         log.add(`[${task.name}] step ${e.step}: ${line}`);
         await page.screenshot({ path: path.join(dir, `step-${String(trace.length).padStart(2, '0')}.png`) }).catch(() => undefined);

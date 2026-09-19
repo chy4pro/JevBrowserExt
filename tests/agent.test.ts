@@ -131,7 +131,7 @@ describe('AgentRunner', () => {
     expect(r.getProgress().status).toBe('done');
     expect(r.getProgress().currentStep).toBe(1);
     expect(jev.mock.calls[1][1].state.recent_actions).toEqual([
-      { action: 'CLICK Search', kind: 'click', text: undefined, page_changed: true },
+      { step: 1, action: 'CLICK Search', kind: 'click', text: undefined, outcome: 'navigated to https://example.com/results', url: 'https://example.com/results', page_changed: true },
     ]);
   });
 
@@ -193,17 +193,24 @@ describe('AgentRunner', () => {
     expect(r.getProgress().logs[1]).toMatchObject({ operation: 'TYPE_TEXT', targetValue: 'Zurich' });
   });
 
-  it('stops with an error, executing nothing, when the model answer is invalid', async () => {
-    jev.mockResolvedValueOnce({
-      model: 'm',
-      answers: { operation: { choice: 'CLICK', probabilities: { CLICK: 0.2, DONE: 0.8 } } },
-    });
+  it('asks once more after an invalid answer, and stops with an error if it repeats', async () => {
+    const invalid = { model: 'm', answers: { operation: { choice: 'CLICK', probabilities: { CLICK: 0.2, DONE: 0.8 } } } };
+    jev.mockResolvedValueOnce(invalid).mockResolvedValueOnce(invalid);
     const r = runner();
     await r.start('Search', 7);
 
     expect(r.getProgress().status).toBe('error');
     expect(r.getProgress().lastError).toMatch(/Invalid operation choice/);
+    expect(jev).toHaveBeenCalledTimes(2);
     expect(page.sent.filter((m) => m.type === 'CONTENT_ACT')).toHaveLength(0);
+  });
+
+  it('recovers when the model answers consistently on the second try', async () => {
+    const invalid = { model: 'm', answers: { operation: { choice: 'CLICK', probabilities: { CLICK: 0.2, DONE: 0.8 } } } };
+    jev.mockResolvedValueOnce(invalid).mockResolvedValueOnce(answer('DONE'));
+    const r = runner();
+    await r.start('Search', 7);
+    expect(r.getProgress().status).toBe('done');
   });
 
   it('single-steps: pauses after one action, continues on the same goal, restarts on a new goal', async () => {
@@ -229,9 +236,16 @@ describe('AgentRunner', () => {
   });
 
   it('stops at the step budget', async () => {
-    jev.mockResolvedValue(answer('CLICK', clickTarget('1')));
+    jev.mockImplementation(async (_s, request) =>
+      answer('CLICK', clickTarget(Object.keys((request.questions.click_target as ChoiceQuestion).criteria)[0]))
+    );
+    let n = 0;
     page.act = () => {
-      page.snapshot = snapshot({ text: `step ${Math.random()}` });
+      n++;
+      page.snapshot = snapshot({
+        text: `page ${n}`,
+        actions: [{ id: 'e1', node: 10 + n, kind: 'click', role: 'link', label: `Result ${n}` }, { id: 'wait', kind: 'wait', label: 'Wait' }],
+      });
       return { success: true };
     };
     const r = runner();
@@ -357,5 +371,133 @@ describe('hesitant verdicts', () => {
     await r.start('Search', 7);
     expect(r.getProgress().status).toBe('blocked');
     expect(jev).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('repeated toggles', () => {
+  beforeEach(() => {
+    jev.mockReset();
+    textHelper.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('warns after the second repeat of a page-changing toggle and blocks after the third', async () => {
+    // Every click on e1 changes the page (a menu opening and closing), so no-change detection never fires.
+    let flips = 0;
+    const page: Page = {
+      snapshot: snapshot(),
+      act: () => { page.snapshot = snapshot({ text: `menu state ${++flips % 2}` }); return { success: true }; },
+      sent: [],
+    };
+    installChrome(page);
+    jev.mockImplementation(async (_s, request) => {
+      const keys = Object.keys((request.questions.click_target as ChoiceQuestion).criteria);
+      return answer('CLICK', clickTarget(keys[0]));
+    });
+    const r = runner();
+    await r.start('Find flights', 7);
+
+    const acts = page.sent.filter((m) => m.type === 'CONTENT_ACT').map((m) => m.action.id);
+    expect(acts.slice(0, 2)).toEqual(['e1', 'e1']);
+    expect((jev.mock.calls[2][1].questions.operation.instructions as any).ineffective_action_alert).toMatch(/executed 2 times/);
+    // After the warning e1 is withheld, so the model gets e3 and no longer repeats e1.
+    expect(Object.keys((jev.mock.calls[2][1].questions.click_target as ChoiceQuestion).criteria)).toEqual(['2']);
+  });
+
+  it('blocks when the same control keeps being chosen despite the warning', async () => {
+    let flips = 0;
+    const page: Page = {
+      snapshot: snapshot({ actions: [{ id: 'e1', node: 1, kind: 'click', role: 'button', label: 'Google apps' }, { id: 'wait', kind: 'wait', label: 'Wait' }] }),
+      act: () => { page.snapshot = snapshot({ text: `apps ${++flips % 2}`, actions: [{ id: 'e1', node: 1, kind: 'click', role: 'button', label: 'Google apps' }, { id: 'wait', kind: 'wait', label: 'Wait' }] }); return { success: true }; },
+      sent: [],
+    };
+    installChrome(page);
+    jev.mockResolvedValue(answer('CLICK', clickTarget('1')));
+    const r = runner();
+    await r.start('Find flights', 7);
+    expect(r.getProgress().status).toBe('blocked');
+    expect(r.getProgress().lastError).toMatch(/repeated 3 times/);
+    expect(page.sent.filter((m) => m.type === 'CONTENT_ACT')).toHaveLength(3);
+  });
+});
+
+describe('cross-checks and outcomes', () => {
+  beforeEach(() => {
+    jev.mockReset();
+    textHelper.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const withChecks = (base: any, goalDone: number, stuck: number) => ({
+    ...base,
+    answers: { ...base.answers, goal_done: { type: 'noul', noul: goalDone }, stuck: { type: 'noul', noul: stuck } },
+  });
+
+  it('vetoes DONE when the goal check disagrees, withholds DONE once, and tells the model why', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: true }), sent: [] };
+    installChrome(page);
+    jev
+      .mockResolvedValueOnce(withChecks(answer('DONE'), 0.1, 0.05))
+      .mockResolvedValueOnce(withChecks({ model: 'm', answers: { operation: { choice: 'CLICK', confidence: 0.9, probabilities: { CLICK: 0.9, WAIT: 0.1 } }, ...clickTarget('1') } }, 0.2, 0.05))
+      .mockResolvedValueOnce(withChecks(answer('DONE'), 0.9, 0.05));
+    const r = runner();
+    await r.start('Search and open results', 7);
+
+    const second = jev.mock.calls[1][1];
+    expect(Object.keys((second.questions.operation as ChoiceQuestion).criteria)).not.toContain('DONE');
+    expect((second.questions.operation.instructions as any).ineffective_action_alert).toMatch(/not achieved yet \(probability 0.10\)/);
+    expect(Object.keys((jev.mock.calls[2][1].questions.operation as ChoiceQuestion).criteria)).toContain('DONE');
+    expect(r.getProgress().status).toBe('done');
+    expect(r.getProgress().logs.map((l) => l.operation)).toEqual(['DONE', 'CLICK', 'DONE (vetoed)']);
+  });
+
+  it('describes outcomes in words and sends run progress in the state', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: true }), sent: [] };
+    installChrome(page);
+    let n = 0;
+    page.act = () => {
+      n++;
+      page.snapshot = n === 1 ? snapshot({ text: snapshot().text + ' menu opened with many more words than before it was' }) : snapshot({ url: 'https://example.com/results', title: 'Results' });
+      return { success: true };
+    };
+    jev.mockResolvedValueOnce(answer('CLICK', clickTarget('1'))).mockResolvedValueOnce(answer('CLICK', clickTarget('1'))).mockResolvedValueOnce(answer('DONE'));
+    const r = runner();
+    await r.start('Search', 7);
+
+    const third = jev.mock.calls[2][1].state;
+    expect(third.recent_actions.map((a: any) => a.outcome)).toEqual([
+      'page content changed (something opened, closed or loaded; same URL)',
+      'navigated to https://example.com/results',
+    ]);
+    expect(third.run).toEqual({ start_url: 'https://example.com/', steps_taken: 2, visited_urls: ['https://example.com/', 'https://example.com/results'] });
+  });
+});
+
+describe('navigation started by an action', () => {
+  beforeEach(() => {
+    jev.mockReset();
+    textHelper.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('waits for the tab to finish loading before observing again', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: true }), sent: [] };
+    const chromeMock = installChrome(page);
+    let loading = false;
+    let listener: ((tabId: number, info: { status?: string }) => void) | null = null;
+    chromeMock.tabs.get.mockImplementation(async () => ({ id: 7, url: 'https://example.com/', status: loading ? 'loading' : 'complete' }));
+    chromeMock.tabs.onUpdated.addListener.mockImplementation((fn: any) => {
+      listener = fn;
+      // The page finishes loading shortly after the agent starts waiting.
+      setTimeout(() => { loading = false; page.snapshot = snapshot({ url: 'https://example.com/sorted', text: 'sorted results' }); fn(7, { status: 'complete' }); }, 30);
+    });
+    page.act = () => { loading = true; return { success: true }; };
+    jev.mockResolvedValueOnce(answer('CLICK', clickTarget('1'))).mockResolvedValueOnce(answer('DONE'));
+    const r = runner();
+    await r.start('Sort by rating', 7);
+
+    expect(listener).not.toBeNull();
+    expect(jev.mock.calls[1][1].state.page.url).toBe('https://example.com/sorted');
+    expect(jev.mock.calls[1][1].state.recent_actions[0].outcome).toBe('navigated to https://example.com/sorted');
   });
 });

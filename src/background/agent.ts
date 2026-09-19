@@ -4,6 +4,7 @@ import { createFieldContext, generateFieldText } from '../shared/text-helper';
 import {
   ActResult,
   AgentProgress,
+  ChoiceQuestion,
   AgentStepLog,
   AppSettings,
   DEFAULT_SETTINGS,
@@ -17,6 +18,36 @@ export function computePageFingerprint(snapshot: PageSnapshot): string {
   const semantics = snapshot.actions.map(({ rect, ...a }) => a);
   return JSON.stringify([snapshot.url, Math.round(snapshot.scroll.y), snapshot.text, semantics]);
 }
+
+interface PageSummary {
+  url: string;
+  title: string;
+  textLength: number;
+  scrollY: number;
+  fingerprint: string;
+}
+
+const summarize = (s: PageSnapshot): PageSummary => ({
+  url: s.url,
+  title: s.title,
+  textLength: s.text.length,
+  scrollY: s.scroll.y,
+  fingerprint: computePageFingerprint(s),
+});
+
+/** Describes, in words the model can use, what an action visibly did. */
+export function describeOutcome(before: PageSummary, after: PageSummary): string {
+  if (after.url !== before.url) return `navigated to ${after.url}`;
+  if (after.title !== before.title) return `page changed: "${after.title}"`;
+  if (Math.abs(after.textLength - before.textLength) > 50) return 'page content changed (something opened, closed or loaded; same URL)';
+  if (Math.abs(after.scrollY - before.scrollY) > 40) return 'scrolled';
+  if (after.fingerprint !== before.fingerprint) return 'minor change on the page';
+  return 'no visible change';
+}
+
+/** DONE / BLOCKED are accepted only when the independent cross-check does not contradict them. */
+const GOAL_DONE_MIN = 0.5;
+const STUCK_MIN = 0.5;
 
 /**
  * Errors Chrome raises when the page navigated (or its document was replaced) while a message
@@ -32,12 +63,22 @@ export function isNavigationError(message: string): boolean {
   );
 }
 
+const OP_BY_KIND: Record<string, string> = { click: 'CLICK', fill: 'TYPE_TEXT', select: 'SELECT', scroll: '', wait: '', key: '' };
+
+function readNoul(answer: any): number | undefined {
+  const v = answer?.noul ?? answer?.probability;
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1 ? v : undefined;
+}
+
 const INTERNAL_PREFIXES = ['chrome://', 'chrome-extension://', 'edge://', 'about:', 'view-source:', 'devtools://'];
 
 const MAX_CONSECUTIVE_STALE = 4;
 /** DONE/BLOCKED below this confidence is confirmed by a second look before the run ends. */
 const TERMINAL_CONFIRM_THRESHOLD = 0.5;
 const DEADLOCK_RUN = 3;
+/** Same target executed this many times within the last REPEAT_WINDOW actions ends the run. */
+const REPEAT_LIMIT = 3;
+const REPEAT_WINDOW = 6;
 
 export class AgentRunner {
   private progress: AgentProgress = {
@@ -54,12 +95,18 @@ export class AgentRunner {
   private runToken = 0;
 
   private lastFingerprint: string | null = null;
+  private lastSummary: PageSummary | null = null;
+  private startUrl = '';
+  private visitedUrls: string[] = [];
   private consecutiveStale = 0;
   private decisionCount = 0;
   private targetFailureCount = new Map<string, number>();
   private lastTargetActionId: string | null = null;
   private lastStaleNotice: string | null = null;
   private pendingTerminal: string | null = null;
+  private vetoed: 'DONE' | 'BLOCKED' | null = null;
+  /** One inconsistent answer is asked again; a second one ends the run. */
+  private invalidAnswerRetried = false;
   /** Text generated for a decision that turned out stale; reused only for an identical helper input. */
   private pendingText: { key: string; text: string } | null = null;
 
@@ -79,12 +126,17 @@ export class AgentRunner {
     this.activeTabId = tabId;
     this.history = [];
     this.lastFingerprint = null;
+    this.lastSummary = null;
+    this.startUrl = '';
+    this.visitedUrls = [];
     this.consecutiveStale = 0;
     this.decisionCount = 0;
     this.targetFailureCount.clear();
     this.lastTargetActionId = null;
     this.lastStaleNotice = null;
     this.pendingTerminal = null;
+    this.vetoed = null;
+    this.invalidAnswerRetried = false;
     this.pendingText = null;
     this.progress = {
       status: 'running',
@@ -244,10 +296,15 @@ export class AgentRunner {
     }
     if (token !== this.runToken) return false;
 
-    // 2. Resolve page_changed for the previous action and detect deadlocks
-    const fingerprint = computePageFingerprint(snapshot);
+    // 2. Resolve what the previous action did and detect deadlocks
+    const summary = summarize(snapshot);
+    const fingerprint = summary.fingerprint;
+    if (!this.startUrl) this.startUrl = snapshot.url;
+    if (this.visitedUrls[this.visitedUrls.length - 1] !== snapshot.url) this.visitedUrls.push(snapshot.url);
     const last = this.history[this.history.length - 1];
-    if (last && last.page_changed === undefined && this.lastFingerprint !== null) {
+    if (last && last.page_changed === undefined && this.lastSummary) {
+      last.outcome = describeOutcome(this.lastSummary, summary);
+      last.url = snapshot.url;
       last.page_changed = fingerprint !== this.lastFingerprint;
       if (!last.page_changed && this.lastTargetActionId && last.kind !== 'wait') {
         const count = (this.targetFailureCount.get(this.lastTargetActionId) || 0) + 1;
@@ -257,6 +314,7 @@ export class AgentRunner {
       }
     }
     this.lastFingerprint = fingerprint;
+    this.lastSummary = summary;
 
     const recent = this.history.slice(-DEADLOCK_RUN);
     if (
@@ -270,17 +328,30 @@ export class AgentRunner {
       return false;
     }
 
-    // 3. Loop feedback for the model
+    // 3. Loop feedback for the model. Toggling the same control (a menu that opens and closes)
+    //    changes the page every time, so repeats are tracked separately from "no change".
     let warning: string | undefined;
+    const repeatedAction = last?.action && last.kind !== 'wait' ? last.action : null;
+    const repeated = repeatedAction ? this.repeatCount(repeatedAction) : 0;
+    if (repeated >= REPEAT_LIMIT) {
+      this.finish('blocked', `The same action "${repeatedAction}" was repeated ${repeated} times without reaching the goal.`);
+      return false;
+    }
+    const suppressedTargetIds = Array.from(this.targetFailureCount.entries())
+      .filter(([, count]) => count >= 2)
+      .map(([id]) => id);
     if (last && last.page_changed === false && last.kind !== 'wait') {
       warning = `ATTENTION: Previous action "${last.action}" resulted in NO visible change on the page. Do NOT repeat the exact same action. Try an alternative target, scroll, or submit button.`;
+    } else if (repeated >= 2 && repeatedAction) {
+      warning = `ATTENTION: "${repeatedAction}" has now been executed ${repeated} times and did not advance the goal. Do NOT choose it again; use a different control that moves toward the goal.`;
+      // Ids are per snapshot; withhold whatever on this page carries the same operation and label.
+      for (const a of snapshot.actions) {
+        if (a.node !== undefined && `${OP_BY_KIND[a.kind] || ''} ${a.label}` === repeatedAction) suppressedTargetIds.push(a.id);
+      }
     } else if (this.lastStaleNotice) {
       warning = this.lastStaleNotice;
     }
     this.lastStaleNotice = null;
-    const suppressedTargetIds = Array.from(this.targetFailureCount.entries())
-      .filter(([, count]) => count >= 2)
-      .map(([id]) => id);
 
     // 4. Decide
     if (this.decisionCount >= this.progress.maxSteps * 2) {
@@ -292,8 +363,15 @@ export class AgentRunner {
       snapshot,
       this.progress.goal,
       this.history,
-      { warning, suppressedTargetIds }
+      { warning, suppressedTargetIds },
+      { start_url: this.startUrl, steps_taken: this.history.length, visited_urls: this.visitedUrls.slice(-6) }
     );
+    if (this.vetoed) {
+      // The previous verdict was contradicted by its cross-check; withhold it this time.
+      delete actionSpace.operations[this.vetoed];
+      delete (request.questions.operation as ChoiceQuestion).criteria[this.vetoed];
+      this.vetoed = null;
+    }
 
     const started = Date.now();
     let jevResponse;
@@ -311,11 +389,27 @@ export class AgentRunner {
     try {
       operationAnswer = validateChoiceAnswer(jevResponse.answers?.operation, actionSpace.operations);
     } catch (err: any) {
-      this.finish('error', `Invalid operation choice: ${err?.message || String(err)}`);
-      return false;
+      return this.rejectAnswer(`Invalid operation choice: ${err?.message || String(err)}`);
     }
     const operation = operationAnswer.choice;
     const provider = this.settings.activeProvider;
+    const goalDone = readNoul(jevResponse.answers?.goal_done);
+    const stuck = readNoul(jevResponse.answers?.stuck);
+
+    if (operation === 'DONE' && goalDone !== undefined && goalDone < GOAL_DONE_MIN) {
+      this.vetoed = 'DONE';
+      this.lastStaleNotice = `ATTENTION: DONE was proposed, but the independent goal check says the task is not achieved yet (probability ${goalDone.toFixed(2)}). Something in the task is still missing; act on it.`;
+      this.addLog({ step: this.progress.currentStep, timestamp: Date.now(), operation: 'DONE (vetoed)', confidence: operationAnswer.confidence, latencyMs, provider, probabilities: operationAnswer.probabilities, goalDone, stuck });
+      this.broadcastUpdate();
+      return true;
+    }
+    if (operation === 'BLOCKED' && stuck !== undefined && stuck < STUCK_MIN && this.history.length < REPEAT_WINDOW) {
+      this.vetoed = 'BLOCKED';
+      this.lastStaleNotice = `ATTENTION: BLOCKED was proposed, but the independent progress check does not see a dead end (stuck probability ${stuck.toFixed(2)}). Choose a control that moves toward the task.`;
+      this.addLog({ step: this.progress.currentStep, timestamp: Date.now(), operation: 'BLOCKED (vetoed)', confidence: operationAnswer.confidence, latencyMs, provider, probabilities: operationAnswer.probabilities, goalDone, stuck });
+      this.broadcastUpdate();
+      return true;
+    }
 
     if (operation === 'DONE' || operation === 'BLOCKED') {
       if (operationAnswer.confidence < TERMINAL_CONFIRM_THRESHOLD && this.pendingTerminal !== operation) {
@@ -333,6 +427,8 @@ export class AgentRunner {
         latencyMs,
         provider,
         probabilities: operationAnswer.probabilities,
+        goalDone,
+        stuck,
       });
       this.finish(operation === 'DONE' ? 'done' : 'blocked');
       this.sendStatus({ text: operation === 'DONE' ? 'Done' : 'Blocked', latencyMs });
@@ -353,8 +449,7 @@ export class AgentRunner {
         targetAction = actionSpace.targets[operation][targetAnswer.choice];
         targetConfidence = targetAnswer.confidence;
       } catch (err: any) {
-        this.finish('error', `Invalid target choice: ${err?.message || String(err)}`);
-        return false;
+        return this.rejectAnswer(`Invalid target choice: ${err?.message || String(err)}`);
       }
     } else if (operation in actionSpace.controls) {
       targetAction = actionSpace.controls[operation];
@@ -422,6 +517,9 @@ export class AgentRunner {
         this.targetFailureCount.set(targetAction.id, (this.targetFailureCount.get(targetAction.id) || 0) + 1);
         this.lastStaleNotice = `ATTENTION: The target "${targetAction.label}" could not be acted on (${actResponse.error || 'page changed'}). If an overlay or dialog is open, act inside it or close it; otherwise choose a different target.`;
         this.broadcastUpdate();
+        // A covered or vanished target usually means the page is still loading or animating
+        // (an in-page sort or filter that swaps the list); give it more time before looking again.
+        await new Promise((r) => setTimeout(r, 500 * this.consecutiveStale));
         return true; // observe again; nothing was executed
       }
       if (!actResponse?.success) {
@@ -439,9 +537,11 @@ export class AgentRunner {
 
     // 8. Record execution before observing again
     this.consecutiveStale = 0;
+    this.invalidAnswerRetried = false;
     this.pendingText = null;
     this.lastTargetActionId = targetAction.id;
     this.history.push({
+      step: this.progress.currentStep + 1,
       action: `${operation} ${targetAction.label}`,
       kind: targetAction.kind,
       text: generatedText,
@@ -459,13 +559,38 @@ export class AgentRunner {
       latencyMs,
       provider,
       probabilities: operationAnswer.probabilities,
+      goalDone,
+      stuck,
     });
     this.broadcastUpdate();
 
+    // A click, select or Enter may have started a navigation that only shows up as the tab
+    // loading; observing the old document now would hand the model a page that is about to
+    // disappear.
     if (navigated) {
       await this.waitForTabToLoad(tabId);
+    } else {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (tab?.status === 'loading') await this.waitForTabToLoad(tabId);
     }
     return true;
+  }
+
+  /** An inconsistent model answer is not executed. The first one is simply asked again. */
+  private rejectAnswer(message: string): boolean {
+    if (!this.invalidAnswerRetried) {
+      this.invalidAnswerRetried = true;
+      this.lastStaleNotice = null;
+      this.broadcastUpdate();
+      return true;
+    }
+    this.finish('error', message);
+    return false;
+  }
+
+  /** How often the same operation + label was executed within the recent window (counting the last action). */
+  private repeatCount(action: string): number {
+    return this.history.slice(-REPEAT_WINDOW).filter((h) => h.action === action && h.kind !== 'wait').length;
   }
 
   private addLog(log: AgentStepLog): void {

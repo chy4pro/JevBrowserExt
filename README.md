@@ -11,35 +11,45 @@ A Chrome extension that drives web pages with [TypeSafe Jev](https://typesafe.ai
 3. If the operation is `TYPE_TEXT`, a small chat model (DeepSeek, Gemini, anything OpenAI-compatible) turns the goal and field context into the exact string to type. The extension never guesses field values itself.
 4. The content script executes the action on the real DOM node. Nothing runs if the page changed since the observation; a click is dispatched once. Enter is never pressed implicitly: when a focused text field holds text, a separate `PRESS_ENTER` control is offered and the model has to choose it (this is the one addition to the reference action space; sites like arXiv and Wolfram Alpha have no submit button).
 
-Jev returns a probability over the offered candidates, so every step in the popup shows what the model considered and how sure it was. Answers are validated strictly: an unknown candidate or an inconsistent distribution stops the run rather than being "repaired".
+Jev has no memory between calls, so everything it needs is in the `state` of each request: the task; the current URL, title and visible text; every element with its role, current value, link target (`href`) and the heading it sits under (`section`); the recent actions with what each one visibly did ("navigated to …", "page content changed", "no visible change"); and the URLs visited so far. The rules reference these fields by name, as the TypeSafe docs recommend.
+
+The same request also asks two independent yes/no questions: is the task already achieved on this page, and are the recent actions stuck? They are answered without seeing the action choice, so they act as an honest cross-check: a DONE the goal check does not support (below 50%) is withheld once and the model is told what is still missing; a BLOCKED the stuck check does not support is treated the same way. The popup shows both probabilities on every step, and **Copy trace** puts the whole run on the clipboard as JSON for bug reports.
+
+Jev returns a probability over the offered candidates, so every step in the popup shows what the model considered and how sure it was. Answers are validated strictly: an unknown candidate or an inconsistent distribution (beyond the provider's two-decimal rounding) is asked once more, then stops the run rather than being "repaired". A control that is chosen three times within six steps, even when each click changes the page (a menu that opens and closes), ends the run as BLOCKED after the model has been warned.
 
 ## Results
 
-Every task below was run through the built extension in headless Chromium (real service worker, content script, popup) with OpenRouter. Tasks come from this extension's popup, from the reference project, from demos people posted on X (Steve Krouse's jev + kernel playground, jkudish/jev-browser, Vlad Terin's Codex adapter) and from WebVoyager-style sites. "Verified" means an independent check of the final URL or page text, not the model's DONE. Full traces: [docs/e2e-suite-2026-09-19.md](docs/e2e-suite-2026-09-19.md).
+Every task below was run through the built extension in headless Chromium (real service worker, content script, popup) with OpenRouter. Tasks come from this extension's popup, from the reference project, from demos people posted on X (Steve Krouse's jev + kernel playground, jkudish/jev-browser, Vlad Terin's Codex adapter) and from WebVoyager-style sites. "Result" is an independent check of the final URL or page text, not the model's DONE. Full traces of the recorded run: [docs/e2e-suite-2026-09-19.md](docs/e2e-suite-2026-09-19.md).
 
 | Source | Task | Result | Steps | Time |
 |---|---|---|---|---|
-| Popup | Google Flights, one-way Zurich → London, Sep 20 2026 | ✅ | 10 | 11.2 s |
-| Popup | Wikipedia: search Taylor Swift, open Early life | ✅ | 4 | 7.9 s |
-| Popup | Add the highest-rated product to the cart (OpenCart demo) | ✅ | 6 | 11.1 s |
-| Reference | Wikipedia: open Gödel's incompleteness theorems | ✅ | 2 | 8.5 s |
-| X / Krouse | Wikiracing: Rubber duck → Eiffel Tower, links only | ✅ | 2 | 2.9 s |
-| X / Krouse | Hacker News: open comments of the top story | ✅ | 1 | 2.9 s |
-| X / Krouse | Val Town: find the Airtable API examples | ❌ | 2 | 5.7 s |
-| X / jev-browser | Wikipedia: Coffee → Espresso | ✅ | 2 | 3.5 s |
-| X / jev-browser | GitHub: open the newest browser-use release | ✅ | 1 | 2.9 s |
-| X / jev-browser | Wikipedia: search Ristretto, stop on the article | ✅ | 2 | 3.3 s |
-| X / Terin | Python docs: open the tutorial's Data Structures chapter | ❌ | 10 | 15.8 s |
-| WebVoyager-style | Wiktionary: look up serendipity | ✅ | 2 | 3.9 s |
-| WebVoyager | arXiv: search "Attention Is All You Need", open the abstract | ❌ | 7 | 8.9 s |
-| WebVoyager | Hugging Face: open openai/whisper-large-v3 | ✅ | 2 | 3.9 s |
-| WebVoyager | Wolfram Alpha: derivative of x³ sin x | ✅ | 4 | 6.2 s |
-| WebVoyager-style | Wikibooks Cookbook: open the banana bread recipe | ✅ | 3 | 6.0 s |
-| WebVoyager | BBC: open the technology section | ✅ | 1 | 3.1 s |
+| Popup | Google Flights, one-way Zurich → London, Sep 20 2026 | ✅ | 14 | 21 s |
+| Popup | Wikipedia: search Taylor Swift, open Early life | ✅ | 3 | 9.6 s |
+| Popup | Add the highest-rated product to the cart (OpenCart demo) | ✅ | 5 | 6.8 s |
+| Reference | Wikipedia: open Gödel's incompleteness theorems | ✅ | 2 | 5.0 s |
+| X / Krouse | Wikiracing: Rubber duck → Eiffel Tower, links only | ✅ | 2 | 6.3 s |
+| X / Krouse | Hacker News: open comments of the top story | ✅ | 1 | 2.0 s |
+| X / Krouse | Val Town: find the Airtable API examples | ❌ | 3 | 7.3 s |
+| X / jev-browser | Wikipedia: Coffee → Espresso | ✅ | 1 | 3.2 s |
+| X / jev-browser | GitHub: open the newest browser-use release | ✅ | 2 | 5.2 s |
+| X / jev-browser | Wikipedia: search Ristretto, stop on the article | ❌ | 0 | 5.5 s |
+| X / Terin | Python docs: open the tutorial's Data Structures chapter | ❌ | 1 | 5.6 s |
+| WebVoyager-style | Wiktionary: look up serendipity | ✅ | 3 | 12.5 s |
+| WebVoyager | arXiv: search "Attention Is All You Need", open the abstract | ❌ | 6 | 22.4 s |
+| WebVoyager | Hugging Face: open openai/whisper-large-v3 | ✅ | 3 | 10.7 s |
+| WebVoyager | Wolfram Alpha: derivative of x³ sin x | ✅ | 4 | 8.3 s |
+| WebVoyager-style | Wikibooks Cookbook: open the banana bread recipe | ✅ | 3 | 7.4 s |
+| WebVoyager | BBC: open the technology section | ✅ | 1 | 2.7 s |
 
-14 of 17. The three misses are the model's, not the executor's: Val Town landed on a network error page during a cross-site hop, the Python docs run searched instead of following the tutorial's table of contents, and on arXiv the model opened the first search result, a 2026 paper with the same title, instead of 1706.03762. Runs vary between attempts; the same suite scored 9, 10 and 11 in earlier rounds while executor bugs were being fixed. Sites behind Cloudflare's "verify you are human" page (Cambridge Dictionary, Allrecipes, demo.nopcommerce.com, demo.opencart.com) stop at that page in a headless datacenter browser; the model correctly reports BLOCKED there.
+13 of 17 in this run; across seven rounds the same suite scored 9, 10, 11, 14, 13, 13 and 13 while executor and loop bugs were being fixed, and individual tasks flip between runs. The misses in this run:
 
-`E2E_TASKS=scripts/e2e-tasks.json npm run e2e:ext` reproduces the table.
+- **Ristretto** and **Python docs**: the text model behind OpenRouter answered HTTP 429 (rate limited) on the first TYPE_TEXT; both passed in earlier rounds. Transient statuses are now retried three times with longer backoff.
+- **Val Town**: the hop to docs.val.town ends on a browser error page in this headless environment, where no content script can run.
+- **arXiv**: the model had the results' `href`s and the "sort by relevance" dropdown and still paged through date-sorted results, then opened a 2026 paper with the same title. A model decision, not missing context.
+
+The cart task failed in six rounds before this one for an executor reason worth knowing: after sorting, that shop keeps the old product cards in the DOM underneath the new list. They passed every visibility check, so the model kept being offered a link nobody could click. The observer now hit-tests every control and drops the ones another block covers. Google Flights in the Chinese interface (`hl=zh-CN`, locale zh-CN) also completes, in 10 steps; its one premature DONE, before the results had loaded, was vetoed by the goal check.
+
+Sites behind Cloudflare's "verify you are human" page (Cambridge Dictionary, Allrecipes, demo.nopcommerce.com, demo.opencart.com) stop at that page in a headless datacenter browser; the model correctly reports BLOCKED there. `E2E_TASKS=scripts/e2e-tasks.json npm run e2e:ext` reproduces the table.
 
 ## Install
 

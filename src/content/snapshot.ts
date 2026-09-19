@@ -42,6 +42,44 @@ const SELECTOR =
   'a[href],button,input,textarea,select,summary,[contenteditable="true"],' +
   ROLES.map((r) => `[role="${r}"]`).join(',');
 
+/**
+ * Where a pointer would land on the element. An inline link wrapped over two lines has a
+ * bounding box whose centre lies between the lines (or on whatever sits below), so the first
+ * rendered fragment is used instead of the union box.
+ */
+export function clickRect(element: Element): DOMRect {
+  const fragments = Array.from(element.getClientRects()).filter((f) => f.width > 0 && f.height > 0);
+  const inView = fragments.filter((f) => f.bottom > 0 && f.top < window.innerHeight);
+  return inView[0] || fragments[0] || element.getBoundingClientRect();
+}
+
+/**
+ * True when the covering element and the target live in the same small component, such as
+ * a hover layer over a product card. Dialogs and page-wide overlays never qualify, so a
+ * modal still blocks clicks on what lies beneath it.
+ */
+export function sameComponent(element: Element, hit: Element): boolean {
+  if (hit.closest('dialog,[role="dialog"],[aria-modal="true"]')) return false;
+  let ancestor: Element | null = element.parentElement;
+  while (ancestor && !ancestor.contains(hit)) ancestor = ancestor.parentElement;
+  if (!ancestor || ancestor === document.body || ancestor === document.documentElement) return false;
+  if (['MAIN', 'HEADER', 'NAV', 'FOOTER', 'SECTION'].includes(ancestor.tagName)) return false;
+  const r = ancestor.getBoundingClientRect();
+  return r.height < window.innerHeight * 0.6 && r.width < window.innerWidth * 0.9;
+}
+
+
+/**
+ * True when a pointer at the element's click point would land on something else that is not
+ * part of the same small component: a modal, a sticky header, or a newer list stacked on top
+ * of a stale one. Such an element cannot be clicked by a person either, so it is not offered.
+ */
+export function isCovered(e: Element, r: DOMRect): boolean {
+  const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+  if (!hit || hit === e || e.contains(hit) || hit.contains(e)) return false;
+  return !sameComponent(e, hit);
+}
+
 export function getCache(): JevCache {
   return (window.__jevFast = window.__jevFast || {
     ids: new WeakMap<Element, number>(),
@@ -155,6 +193,20 @@ export function fieldValue(e: Element): string {
   return (e as HTMLElement).innerText ?? e.textContent ?? '';
 }
 
+/** Path and query of a link, relative to the current origin; other origins keep their host. */
+function linkTarget(a: HTMLAnchorElement): string {
+  const raw = a.getAttribute('href') || '';
+  if (!raw || raw.startsWith('javascript:')) return '';
+  try {
+    const url = new URL(raw, location.href);
+    const local = url.origin === location.origin;
+    const path = `${url.pathname}${url.search}${url.hash}`;
+    return (local ? path : `${url.host}${path}`).slice(0, 100);
+  } catch {
+    return raw.slice(0, 100);
+  }
+}
+
 const innerText = (e: Element | null | undefined): string => {
   if (!e) return '';
   const t = (e as HTMLElement).innerText;
@@ -216,13 +268,19 @@ function readState(): { snapshot: PageSnapshot; observed: ObservedState } | null
   }
 
   const actions: PageAction[] = [];
-  for (const e of Array.from(document.querySelectorAll(SELECTOR))) {
+  // Walk headings and controls in document order so each control knows the heading above it.
+  let section = '';
+  for (const e of Array.from(document.querySelectorAll(`h1,h2,h3,h4,h5,h6,${SELECTOR}`))) {
+    if (/^H[1-6]$/.test(e.tagName)) {
+      if (isVisible(e)) section = innerText(e).replace(/\s+/g, ' ').trim().slice(0, 60);
+      continue;
+    }
     const inputEl = e as HTMLInputElement;
     if (!safe(e) || !isVisible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) {
       continue;
     }
 
-    const r = e.getBoundingClientRect();
+    const r = clickRect(e);
     const x = r.x + r.width / 2;
     const y = r.y + r.height / 2;
     const rname = roleOf(e);
@@ -238,6 +296,7 @@ function readState(): { snapshot: PageSnapshot; observed: ObservedState } | null
       continue;
     }
     if (rname === 'gridcell' && e.querySelector('button,[role="button"]')) continue;
+    if (isCovered(e, r)) continue;
 
     const base: PageAction = {
       id: '',
@@ -250,6 +309,11 @@ function readState(): { snapshot: PageSnapshot; observed: ObservedState } | null
     for (const key of ['checked', 'selected', 'expanded'] as const) {
       const val = e.getAttribute(`aria-${key}`);
       if (val !== null) base[key] = val;
+    }
+    if (section) base.section = section;
+    if (e.tagName === 'A') {
+      const href = linkTarget(e as HTMLAnchorElement);
+      if (href) base.href = href;
     }
     if (['checkbox', 'radio'].includes(inputEl.type)) {
       base.checked = String(inputEl.checked);

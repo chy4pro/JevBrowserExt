@@ -88,6 +88,34 @@ export const Popup: React.FC = () => {
     chrome.runtime.openOptionsPage();
   };
 
+  const [copied, setCopied] = useState(false);
+  const copyTrace = async () => {
+    const trace = {
+      goal: progress.goal,
+      status: progress.status,
+      step: `${progress.currentStep}/${progress.maxSteps}`,
+      error: progress.lastError,
+      provider: settings.activeProvider,
+      steps: [...progress.logs].reverse().map((l) => ({
+        step: l.step,
+        operation: l.operation,
+        target: l.targetLabel,
+        targetId: l.targetId,
+        text: l.targetValue,
+        confidence: l.confidence,
+        latencyMs: l.latencyMs,
+        probabilities: l.probabilities,
+      })),
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(trace, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard unavailable
+    }
+  };
+
   const isRunning = progress.status === 'running';
 
   const providerLabel = {
@@ -221,7 +249,12 @@ export const Popup: React.FC = () => {
 
       {/* Live Decisions Feed */}
       <div style={styles.logsSection}>
-        <div style={styles.logsTitle}>Decision Feed (Decisions, Not Strings)</div>
+        <div style={{ ...styles.logsTitle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Decision Feed (Decisions, Not Strings)</span>
+          <button onClick={copyTrace} disabled={progress.logs.length === 0} title="Copy the run trace as JSON" style={styles.chip}>
+            {copied ? 'Copied' : 'Copy trace'}
+          </button>
+        </div>
         <div style={styles.logsList}>
           {progress.logs.length === 0 ? (
             <div style={styles.emptyLog}>No actions recorded yet.</div>
@@ -236,6 +269,11 @@ export const Popup: React.FC = () => {
                   <div style={styles.targetRow}>
                     <span style={styles.targetId}>{log.targetId}</span>
                     <span style={styles.targetLabel}>{log.targetLabel}</span>
+                  </div>
+                )}
+                {(log.goalDone !== undefined || log.stuck !== undefined) && (
+                  <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>
+                    goal {log.goalDone !== undefined ? Math.round(log.goalDone * 100) : '–'}% · stuck {log.stuck !== undefined ? Math.round(log.stuck * 100) : '–'}%
                   </div>
                 )}
                 {log.targetValue && (

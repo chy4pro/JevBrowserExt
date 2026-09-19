@@ -1,4 +1,4 @@
-import { NEXT_ACTION_RULES, TARGET_RULES } from './prompts';
+import { GOAL_DONE_RULES, NEXT_ACTION_RULES, STUCK_RULES, TARGET_RULES } from './prompts';
 import {
   JevQuestions,
   JevRequest,
@@ -6,6 +6,7 @@ import {
   PageAction,
   PageSnapshot,
   RecentAction,
+  RunProgressState,
 } from './types';
 
 export interface LoopContext {
@@ -67,6 +68,8 @@ export function buildActionSpace(
         operations: [],
       };
       if (action.role) element.role = action.role;
+      if (action.href) element.href = action.href;
+      if (action.section) element.section = action.section;
       if (action.value) element.value = action.value;
       if (action.checked !== undefined) element.checked = action.checked;
       if (action.selected !== undefined) element.selected = action.selected;
@@ -118,6 +121,8 @@ export function buildActionSpace(
 
   const questions: JevQuestions = {
     operation: { type: 'choice', criteria: operations, instructions },
+    goal_done: { type: 'noul', instructions: GOAL_DONE_RULES },
+    stuck: { type: 'noul', instructions: STUCK_RULES },
   };
 
   for (const [operation, candidates] of Object.entries(targets)) {
@@ -127,6 +132,8 @@ export function buildActionSpace(
         element: `[${idx}] ${a.label}`,
         current_value: a.current_value || a.value || '',
         ...(a.role ? { role: a.role } : {}),
+        ...(a.href ? { href: a.href } : {}),
+        ...(a.section ? { section: a.section } : {}),
         ...(a.checked ? { checked: a.checked } : {}),
         ...(a.selected ? { selected: a.selected } : {}),
         ...(a.expanded ? { expanded: a.expanded } : {}),
@@ -152,13 +159,15 @@ export function buildJevRequest(
   snapshot: PageSnapshot,
   goal: string,
   history: RecentAction[],
-  loopContext?: LoopContext
+  loopContext?: LoopContext,
+  run?: RunProgressState
 ): { request: JevRequest; actionSpace: ActionSpaceResult } {
   const actionSpace = buildActionSpace(snapshot.actions, goal, loopContext);
 
   const request: JevRequest = {
     model,
     state: {
+      task: goal,
       page: {
         url: snapshot.url,
         title: snapshot.title,
@@ -166,11 +175,15 @@ export function buildJevRequest(
       },
       elements: actionSpace.elements,
       recent_actions: history.slice(-10).map((h) => ({
+        step: h.step,
         action: h.action,
         kind: h.kind,
         text: h.text,
+        outcome: h.outcome ?? (h.page_changed === undefined ? 'pending' : h.page_changed ? 'page changed' : 'no visible change'),
+        url: h.url,
         page_changed: h.page_changed ?? false,
       })),
+      ...(run ? { run } : {}),
     },
     questions: actionSpace.questions,
   };
@@ -183,6 +196,9 @@ export interface ValidatedChoice {
   confidence: number;
   probabilities: Record<string, number>;
 }
+
+/** Providers round probabilities to two decimals; the chosen candidate may trail the maximum by that much. */
+const ROUNDING_TOLERANCE = 0.015;
 
 const unit = (n: unknown): n is number =>
   typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
@@ -223,8 +239,9 @@ export function validateChoiceAnswer(
     throw new Error('Jev probabilities do not sum to 1; no action executed.');
   }
   const max = Math.max(...Object.values(dist));
-  if (dist[choice] < max - 1e-6) {
-    throw new Error(`Jev chose "${choice}" but a different candidate has higher probability; no action executed.`);
+  if (dist[choice] < max - ROUNDING_TOLERANCE) {
+    const shown = Object.entries(dist).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k}=${v}`).join(', ');
+    throw new Error(`Jev chose "${choice}" but a different candidate has higher probability (${shown}); no action executed.`);
   }
 
   return {

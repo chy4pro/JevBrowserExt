@@ -1,6 +1,6 @@
 {
   "name": "jevbrowserext",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Chrome extension that drives web pages with TypeSafe Jev, a decision model that picks the next click, keystroke or dropdown value in a few hundred milliseconds. MV3 port of browser-use/jev-ultrafast.",
   "scripts": {
     "build": "vite build",
