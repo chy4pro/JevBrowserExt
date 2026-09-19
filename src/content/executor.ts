@@ -167,10 +167,13 @@ export async function executeAction(action: PageAction, text?: string): Promise<
     }
 
     if (action.kind === 'click') {
-      dispatchPointerSequence(element, x, y);
+      // A real pointer lands on the innermost element at the point, e.g. the <a> inside an
+      // option row; dispatching on that element lets its activation behavior run.
+      const clickTarget = hit && hit !== element && element.contains(hit) ? (hit as HTMLElement) : element;
+      dispatchPointerSequence(clickTarget, x, y);
       element.focus();
-      // One click only. element.click() runs the activation behavior (toggle, navigate, submit).
-      element.click();
+      // One click only. click() runs the activation behavior (toggle, navigate, submit).
+      clickTarget.click();
       await settleAfter(action);
       return { success: true };
     }

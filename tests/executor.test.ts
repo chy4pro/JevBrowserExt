@@ -143,6 +143,22 @@ describe('executeAction', () => {
     expect(res.success).toBe(false);
   });
 
+  it('clicks the innermost element under the pointer so a link inside an option row navigates', async () => {
+    document.body.innerHTML = '<ul><li role="option" id="row"><a id="link" href="#go">Taylor Swift</a></li></ul>';
+    const row = document.getElementById('row')!;
+    const link = document.getElementById('link')!;
+    const clicked: string[] = [];
+    row.addEventListener('click', (e) => clicked.push('row:' + (e.target as Element).id));
+    link.addEventListener('click', (e) => { clicked.push('link'); e.preventDefault(); });
+
+    const snapshot = takeSnapshot()!;
+    (document as any).elementFromPoint = () => link;
+    const res = await executeAction(actionFor(snapshot.actions, (a) => a.role === 'option'));
+
+    expect(res).toEqual({ success: true });
+    expect(clicked).toEqual(['link', 'row:link']);
+  });
+
   it('runs wait and scroll controls', async () => {
     document.body.innerHTML = '<p>Hello</p>';
     const snapshot = takeSnapshot()!;
