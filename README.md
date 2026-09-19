@@ -1,194 +1,100 @@
-# ⚡ JevBrowserExt
+# JevBrowserExt
 
-> **Ultrafast Browser Automation Chrome Extension powered by TypeSafe Jev (System 1 Decision Engine)**
+A Chrome extension that drives web pages with [TypeSafe Jev](https://typesafe.ai), a decision model that picks the next click, keystroke or dropdown value in a few hundred milliseconds instead of generating text. It is a Manifest V3 port of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast): same observation format, same questions, same execution rules, running inside your own browser and your own tabs.
 
 [English](README.md) | [简体中文](README_CN.md)
 
----
+## How it works
 
-**JevBrowserExt** is a lightweight, ultra-low latency browser automation extension built for Google Chrome (Manifest V3). Inspired by [`browser-use/jev-ultrafast`](https://github.com/browser-use/jev-ultrafast), it replaces traditional slow Vision-Language Models (VLMs that take 3–10 seconds per step) with **TypeSafe Jev**, a non-autoregressive decision model that yields decisions in **70ms – 250ms**.
+1. The content script reads the visible page: every interactive element gets a code-owned index, a role, an accessible name and its current value. Visible text is captured up to 6,000 characters. No screenshots.
+2. The background worker sends one request to Jev with the goal, the element table and recent actions. Jev answers two questions at once: which operation (`CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_*`, `WAIT`, `DONE`, `BLOCKED`) and, for each operation, which element. Only the target head of the chosen operation is used.
+3. If the operation is `TYPE_TEXT`, a small chat model (DeepSeek, Gemini, anything OpenAI-compatible) turns the goal and field context into the exact string to type. The extension never guesses field values itself.
+4. The content script executes the action on the real DOM node. Nothing runs if the page changed since the observation; a click is dispatched once; Enter is never pressed on the model's behalf.
 
----
+Jev returns a probability over the offered candidates, so every step in the popup shows what the model considered and how sure it was. Answers are validated strictly: an unknown candidate or an inconsistent distribution stops the run rather than being "repaired".
 
-## 🌟 Key Features
+A real run against Wikipedia with the goal "Search for Taylor Swift and open her early life section", through OpenRouter:
 
-- **⚡ Sub-Second Decisions (70ms – 250ms)**:
-  Bypasses heavy screenshot encoding and slow multi-second autoregressive text generation. In a single forward pass, Jev simultaneously predicts the operation (`CLICK`, `TYPE_TEXT`, `SELECT`, `WAIT`, `DONE`) and speculative target candidates.
-- **🎯 Decisions, Not Token Generation**:
-  Returns structured categorical decisions and calibrated confidence probabilities (`answers.operation`, `answers.click_target`), saving immense token costs compared to full LLM agents.
-- **🌐 Three First-Class Jev Providers**:
-  - **TypeSafe.ai Official API** (`https://api.typesafe.ai/v1/systemone`)
-  - **OpenRouter Decisions API** (`https://openrouter.ai/api/alpha/decisions`, model: `typesafe/jev-1.13`)
-  - **Cloudflare Workers AI** (`https://api.cloudflare.com/client/v4/accounts/{id}/ai/run`)
-- **🧠 Dual-Model Orchestration**:
-  - **Jev (System 1)**: Rapidly decides navigation, clicks, element focus, and dropdown selection.
-  - **Text Helper (System 2)**: Only invoked when a field needs text input (`TYPE_TEXT`). A lightweight text model (e.g. `deepseek/deepseek-chat` or `google/gemini-3.7-flash`) extracts or generates the exact value from the user's goal.
-- **🛡️ Stale-Safe Execution**:
-  - Every decision is checked against the page it was made on (URL, viewport, form values, target state and nearby context) right before acting; a stale decision is discarded and the page is observed again. Nothing is ever executed twice.
-  - The executor re-checks visibility, enabled state, geometry and occlusion, clicks exactly once, and never presses Enter on the model's behalf — submitting or picking an autocomplete suggestion is the model's next decision.
-  - After each action the next observation waits for the page to react (two animation frames, or visible options for autocomplete fields).
-- **🔄 Loop Feedback & Deadlock Detection**:
-  - A semantic page fingerprint tracks genuine `page_changed` state for every action.
-  - The model is warned when its previous action changed nothing; a target that misses twice is removed from the candidates while alternatives remain.
-  - Three consecutive non-wait actions without any change stop the run as `BLOCKED`; a step budget and a model-call budget bound every run.
-  - Model answers are validated strictly (offered candidate, consistent probability distribution). An invalid answer stops the run instead of being "repaired".
-- **🎨 Interactive Visual Overlay**:
-  - Real-time `[1]`, `[2]`, `[3]` badge overlays on interactive elements.
-  - Floating execution HUD on the page showing the current operation, target and decision latency.
-  - Support for autonomous run (**▶ Run Ultrafast**) and interactive single-stepping (**⏭ Step**).
+| Step | Operation | Target | Jev latency |
+|---|---|---|---|
+| 1 | TYPE_TEXT | Search Wikipedia → "Taylor Swift" (text model, 1.6 s) | 346 ms |
+| 2 | CLICK | Search | 369 ms |
+| 3 | CLICK | 1 Life and career | 366 ms |
+| 4 | DONE | | 592 ms |
 
----
+## Install
 
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                      Chrome Browser                     │
-│                                                         │
-│  ┌────────────────────────┐    ┌─────────────────────┐  │
-│  │ Popup / Options UI     │    │ Content Script      │  │
-│  │ (React + Vite)         │    │ - Atomic DOM Parser │  │
-│  │ - Goal configuration   │    │ - Element Badges    │  │
-│  │ - Live step logs & HUD │    │ - Action Executor   │  │
-│  └───────────┬────────────┘    └──────────┬──────────┘  │
-│              │                            │             │
-│              ▼                            ▼             │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │ Background Service Worker (Agent Engine)          │  │
-│  │ - DOM Observation & Page Fingerprint Tracker      │  │
-│  │ - Action Space & Choice Question Formulation      │  │
-│  │ - Loop Breaker & Ineffective Action Feedback      │  │
-│  └───────────────────────┬───────────────────────────┘  │
-└──────────────────────────┼──────────────────────────────┘
-                           │
-         ┌─────────────────┴─────────────────┐
-         ▼                                   ▼
-┌───────────────────────────┐     ┌───────────────────────────┐
-│ Jev Decision Engine       │     │ Auxiliary Text Helper     │
-│ (TypeSafe / OpenRouter /  │     │ (Invoked ONLY on          │
-│  Cloudflare Workers AI)   │     │  TYPE_TEXT operations)    │
-│ - Operation head          │     │ - DeepSeek / Gemini       │
-│ - Speculative target head │     │ - Form input generation   │
-└───────────────────────────┘     └───────────────────────────┘
-```
-
----
-
-## 🚀 Quick Start
-
-### 1. Prerequisites & Installation
-
-Clone this repository and install dependencies:
+There is no store listing yet. Build it from source:
 
 ```bash
 git clone https://github.com/chy4pro/JevBrowserExt.git
 cd JevBrowserExt
 npm install
-```
-
-### 2. Run Tests & Build
-
-```bash
-# Run unit tests
-npm test
-
-# Build production bundle for Chrome (outputs to dist/)
 npm run build
 ```
 
-### 3. Load into Google Chrome
+Then open `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the `dist/` folder.
 
-1. Open Google Chrome and navigate to `chrome://extensions/`.
-2. Enable **Developer mode** toggle in the top-right corner.
-3. Click **Load unpacked** (加载已解压的扩展程序).
-4. Select the `dist/` directory inside this project.
-5. The extension **⚡ Jev Ultrafast Agent** will appear in your Chrome toolbar.
+## Configure
 
----
+Open the extension's Options page.
 
-## ⚙️ Configuration
+**Jev provider** (pick one):
 
-Right-click the extension icon and select **Options** (选项), or open `chrome-extension://<id>/options.html`:
+| Provider | Endpoint | Model |
+|---|---|---|
+| OpenRouter | `https://openrouter.ai/api/alpha/decisions` | `typesafe/jev-1.13` |
+| TypeSafe.ai | `https://api.typesafe.ai/v1/systemone` | `jev-latest` |
+| Cloudflare Workers AI | `https://api.cloudflare.com/client/v4/accounts/{id}/ai/run` | `typesafe/jev` |
 
-### 1. Jev Provider Configuration
-Select your active provider:
-- **OpenRouter (Recommended)**:
-  - **API Key**: Enter your OpenRouter API Key (`sk-or-v1-...`).
-  - **Model**: `typesafe/jev-1.13`
-  - **Endpoint**: `https://openrouter.ai/api/alpha/decisions`
-- **TypeSafe.ai (Official)**:
-  - **API Key**: Enter your TypeSafe API Key (`sk-...`).
-  - **Model**: `jev-latest`
-  - **Endpoint**: `https://api.typesafe.ai/v1/systemone`
-- **Cloudflare Workers AI**:
-  - **Account ID** & **API Token**
-  - **Model**: `typesafe/jev`
+**Text helper** (only used for `TYPE_TEXT`): OpenRouter, DeepSeek direct, or any OpenAI-compatible base URL. Switching the provider fills in its default base URL and model. If the helper runs through OpenRouter and you already entered an OpenRouter key, you can leave the helper key empty.
 
-### 2. Text Helper Configuration
-Used only when Jev selects an input box to fill:
-- **Provider**: OpenRouter, DeepSeek, or OpenAI-compatible. Switching the provider fills in that provider's default Base URL and model (for example `deepseek/deepseek-chat` on OpenRouter, `deepseek-chat` on DeepSeek direct).
-- **API Key**: optional when the helper uses OpenRouter and an OpenRouter key is already configured.
+**Runtime**: max steps per run, delay between steps, and whether to draw the numbered badges on the page.
 
----
+The **Test** button on each provider sends a tiny real request and shows the answer, so you can check a key before starting a run.
 
-## 🧪 Testing
+## Use
 
-Unit tests cover action-space generation, strict answer validation, provider adapters and retry policy, text helper parsing, DOM snapshot classification, the in-page executor (single click, no synthetic Enter, stale and occlusion guards) and the agent loop (stale retries, deadlock detection, text-value caching, single-stepping, budgets). Tests never call paid APIs.
+Click the toolbar icon, type a goal, press **Run**. **Step** executes exactly one action so you can watch decisions one at a time; **Stop** aborts. The page shows numbered badges on the elements the model can see and a small status bar with the current action and its latency.
+
+Runs stop on `DONE`, on `BLOCKED`, after three consecutive actions that changed nothing on the page, when the step budget is exhausted, or on any provider error. `DONE` is the model's opinion, not proof; check the page.
+
+## What is and isn't handled
+
+Works: links, buttons, text inputs, textareas, contenteditable, native `<select>`, checkboxes and radios that are actually rendered, ARIA roles (`button`, `link`, `combobox`, `option`, `tab`, `menuitem`, ...), autocomplete lists, in-page and cross-page navigation, scrolling.
+
+Not handled: elements inside shadow roots or iframes, canvas UIs, file uploads, drag and drop, keyboard-only widgets, and natively hidden checkboxes/radios styled through their label (the model cannot see them). Password fields are never observed or filled. Internal `chrome://` pages are refused.
+
+Same policy and same boundaries as the reference implementation; two websites do not prove general reliability.
+
+## Development
 
 ```bash
-# Type-check, unit tests and production build
-npm run check
-
-# Run all Vitest unit tests
-npm test
-
-# (Optional) Run live network end-to-end integration test
-export OPENROUTER_API_KEY="your-openrouter-key"
-npx tsx scripts/test_live_e2e.ts
+npm run check      # typecheck + unit tests + production build
+npm test           # vitest
+npm run typecheck
 ```
 
----
+Tests cover the action space and answer validation, provider adapters and retry policy, the text helper parser, DOM snapshot classification, the in-page executor (jsdom) and the agent loop (mocked `chrome`). They never call a paid API. `scripts/test_live_e2e.ts` runs two real requests when `OPENROUTER_API_KEY` is set.
 
-## 📁 Project Structure
-
-```text
-JevBrowserExt/
-├── public/                 # Static assets and icons
-│   ├── icon16.png / icon48.png / icon128.png
-│   └── manifest.json
-├── src/
-│   ├── background/         # Service Worker & Agent Runner
-│   │   ├── agent.ts        # Observation, decision, and loop breaker engine
-│   │   └── index.ts        # Extension runtime message router
-│   ├── content/            # Injected Webpage Scripts
-│   │   ├── snapshot.ts     # Atomic DOM element extractor (up to 250 elements) + freshness guards
-│   │   ├── executor.ts     # Stale-safe execution (single click, fill via prototype setter, select)
-│   │   ├── overlay.ts      # Visual badges and status HUD
-│   │   └── index.ts        # Content script entry listener (guarded against double injection)
-│   ├── popup/              # React Popup UI
-│   │   └── Popup.tsx       # Goal input, run/step/stop controls, step logs
-│   ├── options/            # React Options UI
-│   │   └── Options.tsx     # Provider switcher & live connection test
-│   └── shared/             # Shared Types, Prompts, and Adapters
-│       ├── action-space.ts # Speculative questions & choice validator
-│       ├── prompts.ts      # System prompts & operation rules
-│       ├── text-helper.ts  # Fallback text generator for TYPE_TEXT
-│       ├── types.ts        # Core TypeScript interfaces & schemas
-│       └── providers/      # Adapters for TypeSafe, OpenRouter, Cloudflare (+ shared HTTP retry)
-├── tests/                  # Vitest test suite
-│   ├── action-space.test.ts
-│   ├── agent.test.ts
-│   ├── executor.test.ts
-│   ├── providers.test.ts
-│   └── text-helper.test.ts
-├── scripts/
-│   ├── generate_icons.js   # Icon generation script
-│   └── test_live_e2e.ts    # Live network integration test
-└── package.json            # (the MV3 manifest lives in public/manifest.json)
+```
+src/
+  background/agent.ts        observe → decide → act loop, budgets, deadlock detection
+  background/index.ts        message router, settings storage
+  content/snapshot.ts        DOM observation, node identity cache, freshness guards
+  content/executor.ts        stale-safe click / fill / select / scroll
+  content/overlay.ts         badges and status bar
+  shared/action-space.ts     element table, Jev questions, strict answer validation
+  shared/text-helper.ts      TYPE_TEXT value generation
+  shared/providers/          TypeSafe, OpenRouter, Cloudflare adapters
+  popup/, options/           React UI
+public/manifest.json         MV3 manifest (copied into dist/)
 ```
 
----
+## Keywords
 
-## 📄 License
+browser agent, web agent, browser automation, chrome extension, manifest v3, typesafe jev, jev-1.13, system 1 model, non-autoregressive, decision model, openrouter decisions api, cloudflare workers ai, browser-use, jev-ultrafast, dom automation, ai agent, web automation, typescript, react, vite
 
-MIT License. See [LICENSE](LICENSE) for details.
+## License
+
+MIT

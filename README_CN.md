@@ -1,152 +1,100 @@
-# ⚡ JevBrowserExt
+# JevBrowserExt
 
-> **基于 TypeSafe Jev（系统一非自回归决策引擎）的极速浏览器自动化 Chrome 插件**
+一个用 [TypeSafe Jev](https://typesafe.ai) 驱动网页的 Chrome 扩展。Jev 不生成文本，它在几百毫秒内直接选出下一步该点哪、该在哪输入、该选哪个下拉项。本项目是 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) 的 Manifest V3 移植：同样的观察格式、同样的问题、同样的执行规则，跑在你自己的浏览器和标签页里。
 
 [English](README.md) | [简体中文](README_CN.md)
 
----
+## 工作方式
 
-**JevBrowserExt** 是专为 Google Chrome（Manifest V3）打造的超轻量、低延迟浏览器自动化扩展插件。设计理念源自 [`browser-use/jev-ultrafast`](https://github.com/browser-use/jev-ultrafast)，通过将传统需要 3~10 秒的多模态 VLM（截图 + 逐字生成的慢速过程）替换为 **TypeSafe Jev** 决策模型，将单步动作裁决时间极致压缩至 **70ms ~ 250ms**。
+1. 内容脚本读取当前可见页面：每个可交互元素得到一个由代码分配的编号、角色、可访问名称和当前值；可见文本最多取 6,000 字符。不截图。
+2. 后台 worker 把目标、元素表和最近动作一次性发给 Jev。Jev 同时回答两个问题：做什么操作（`CLICK`、`TYPE_TEXT`、`SELECT`、`SCROLL_*`、`WAIT`、`DONE`、`BLOCKED`），以及每种操作对应哪个元素。只消费被选中操作的那个目标答案。
+3. 如果操作是 `TYPE_TEXT`，由一个小型对话模型（DeepSeek、Gemini 或任何 OpenAI 兼容接口）根据目标和字段上下文给出要输入的字符串。扩展本身从不猜测字段值。
+4. 内容脚本在真实 DOM 节点上执行。页面若在观察之后发生了变化就不执行；点击只触发一次；不会替模型按 Enter。
 
----
+Jev 返回的是候选项上的概率分布，弹窗里每一步都能看到模型考虑了什么、有多确定。答案会被严格校验：出现未提供的候选或分布不自洽时直接终止，不做"修补"。
 
-## 🌟 核心特性
+一次真实运行，目标是 "Search for Taylor Swift and open her early life section"，从 Wikipedia 首页开始，走 OpenRouter：
 
-- **⚡ 亚秒级极速决策（70ms ~ 250ms）**：
-  摒弃笨重的高清截图编码与漫长的文字自回归生成过程。Jev 在单次前向推理中，同时裁决下一步动作类型（`CLICK`、`TYPE_TEXT`、`SELECT`、`WAIT`、`DONE`）及候选目标元素。
-- **🎯 纯粹决策输出（Decisions, Not Strings）**：
-  直接返回结构化决策与校准置信度（`answers.operation`、`answers.click_target`），不产生冗长自然语言 Token，相比传统 LLM Agent 极大节省计算与 API 费用。
-- **🌐 原生支持三大 Jev 接入渠道**：
-  - **TypeSafe.ai 官方 API**（`https://api.typesafe.ai/v1/systemone`）
-  - **OpenRouter Decisions API**（`https://openrouter.ai/api/alpha/decisions`，模型：`typesafe/jev-1.13`）
-  - **Cloudflare Workers AI**（`https://api.cloudflare.com/client/v4/accounts/{id}/ai/run`）
-- **🧠 双模型协同架构（Dual-Model Orchestration）**：
-  - **Jev（系统一）**：快速裁决点击、导航、聚焦、下拉选择等空间与交互动作。
-  - **Text Helper（系统二）**：仅在遇到输入框（`TYPE_TEXT`）时调用。由轻量文本大模型（如 `deepseek/deepseek-chat` 或 `google/gemini-3.7-flash`）根据用户目标快速提取填充文本。
-- **🛡️ 防过期执行（Stale-Safe Execution）**：
-  - 每个决策在执行前都会与它所依据的页面状态比对（URL、视口、表单值、目标元素状态及其所在表单/对话框/行的上下文）；页面已变则丢弃该决策、重新观察。任何动作都不会被执行两次。
-  - 执行器在动作前重新检查可见性、可用状态、几何位置与遮挡；点击只触发一次；不会替模型按 `Enter`——提交或选取自动补全建议由模型在下一步决定。
-  - 每次动作后等待页面响应（两帧动画，或等待自动补全选项出现）再进行下一次观察。
-- **🔄 循环反馈与死锁检测**：
-  - 语义化页面指纹为每个动作标注真实的 `page_changed` 状态。
-  - 上一动作无效时向 Jev 下发警告；同一目标连续两次无效且存在替代目标时，将其移出候选。
-  - 连续三个非 WAIT 动作均未引起页面变化即判定 `BLOCKED` 终止；每次运行同时受步数预算与模型调用预算约束。
-  - 严格校验模型答案（必须是已提供的候选、概率分布自洽）；答案非法即终止，绝不"修补"后执行。
-- **🎨 实时可视化悬浮交互**：
-  - 页面实时可交互元素编号悬浮标签 `[1]`, `[2]`, `[3]`。
-  - 页面内悬浮 HUD 状态条实时展示当前操作、目标元素与决策延迟。
-  - 支持全自动运行（**▶ Run Ultrafast**）与单步调试（**⏭ Step**）。
+| 步 | 操作 | 目标 | Jev 延迟 |
+|---|---|---|---|
+| 1 | TYPE_TEXT | Search Wikipedia → "Taylor Swift"（文本模型 1.6 s） | 346 ms |
+| 2 | CLICK | Search | 369 ms |
+| 3 | CLICK | 1 Life and career | 366 ms |
+| 4 | DONE | | 592 ms |
 
----
+## 安装
 
-## 🏗️ 系统架构图
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                      Chrome 浏览器                      │
-│                                                         │
-│  ┌────────────────────────┐    ┌─────────────────────┐  │
-│  │ Popup / Options UI     │    │ Content Script      │  │
-│  │ (React + Vite)         │    │ - 原子 DOM 提取器   │  │
-│  │ - 目标指令配置与交互   │    │ - 元素悬浮标记      │  │
-│  │ - 步骤日志与实时 HUD   │    │ - 真实动作执行器    │  │
-│  └───────────┬────────────┘    └──────────┬──────────┘  │
-│              │                            │             │
-│              ▼                            ▼             │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │ Background Service Worker (调度内核)              │  │
-│  │ - DOM 观察与页面指纹差分计算                      │  │
-│  │ - 动作空间与候选问题构造                          │  │
-│  │ - 死锁侦测与动态自愈熔断机制                      │  │
-│  └───────────────────────┬───────────────────────────┘  │
-└──────────────────────────┼──────────────────────────────┘
-                           │
-         ┌─────────────────┴─────────────────┐
-         ▼                                   ▼
-┌───────────────────────────┐     ┌───────────────────────────┐
-│ Jev 决策引擎              │     │ 辅助文本大模型            │
-│ (TypeSafe / OpenRouter /  │     │ (仅在 TYPE_TEXT           │
-│  Cloudflare Workers AI)   │     │  需要填表时按需调用)      │
-│ - 操作裁决头              │     │ - DeepSeek / Gemini       │
-│ - 目标候选裁决头          │     │ - 输入内容精准生成        │
-└───────────────────────────┘     └───────────────────────────┘
-```
-
----
-
-## 🚀 快速上手
-
-### 1. 克隆项目并安装依赖
+暂未上架商店，从源码构建：
 
 ```bash
 git clone https://github.com/chy4pro/JevBrowserExt.git
 cd JevBrowserExt
 npm install
-```
-
-### 2. 运行测试与项目编译
-
-```bash
-# 运行单元测试
-npm test
-
-# 编译打包 Chrome MV3 产物（输出至 dist/）
 npm run build
 ```
 
-### 3. 加载至 Google Chrome
+打开 `chrome://extensions`，开启开发者模式，点 **加载已解压的扩展程序**，选择 `dist/` 目录。
 
-1. 打开 Google Chrome 浏览器，在地址栏输入 `chrome://extensions/`。
-2. 开启右上角的 **开发者模式** 开关。
-3. 点击左上角的 **加载已解压的扩展程序**（Load unpacked）。
-4. 选择本项目中的 `dist/` 目录。
-5. 扩展程序栏中即会出现 **⚡ Jev Ultrafast Agent** 图标。
+## 配置
 
----
+打开扩展的选项页。
 
-## ⚙️ 模型与渠道配置
+**Jev 渠道**（三选一）：
 
-右键扩展图标选择 **选项（Options）**，或直接打开 `chrome-extension://<id>/options.html`：
+| 渠道 | 端点 | 模型 |
+|---|---|---|
+| OpenRouter | `https://openrouter.ai/api/alpha/decisions` | `typesafe/jev-1.13` |
+| TypeSafe.ai | `https://api.typesafe.ai/v1/systemone` | `jev-latest` |
+| Cloudflare Workers AI | `https://api.cloudflare.com/client/v4/accounts/{id}/ai/run` | `typesafe/jev` |
 
-### 1. Jev 决策渠道配置
-选择使用的服务提供商：
-- **OpenRouter（推荐）**：
-  - **API Key**：填入 OpenRouter 密钥（`sk-or-v1-...`）。
-  - **Model**：`typesafe/jev-1.13`
-  - **Endpoint**：`https://openrouter.ai/api/alpha/decisions`
-- **TypeSafe.ai（官方）**：
-  - **API Key**：填入官方控制台获取的 `sk-...`
-  - **Model**：`jev-latest`
-  - **Endpoint**：`https://api.typesafe.ai/v1/systemone`
-- **Cloudflare Workers AI**：
-  - **Account ID** 与 **API Token**
-  - **Model**：`typesafe/jev`
+**文本助手**（只在 `TYPE_TEXT` 时用到）：OpenRouter、DeepSeek 直连，或任意 OpenAI 兼容 Base URL。切换渠道会自动填入该渠道的默认 Base URL 和模型。如果助手走 OpenRouter 且已经填了 OpenRouter key，助手的 key 可以留空。
 
-### 2. 文本辅助模型配置
-仅在 Jev 选择填充输入框时触发：
-- **Provider**：OpenRouter、DeepSeek 或 OpenAI 兼容接口。切换 Provider 时会自动填入该渠道的默认 Base URL 与模型（如 OpenRouter 下为 `deepseek/deepseek-chat`，DeepSeek 直连为 `deepseek-chat`）。
-- **API Key**：当辅助模型走 OpenRouter 且已配置 OpenRouter Key 时可留空。
+**运行参数**：每次运行的最大步数、步间延迟、是否在页面上画编号徽章。
 
----
+每个渠道旁边的 **Test** 按钮会发一个很小的真实请求并显示返回，可以在开跑前确认 key 是否可用。
 
-## 🧪 自动化测试
+## 使用
 
-单元测试覆盖动作空间生成、严格答案校验、渠道适配器与重试策略、文本辅助解析、DOM 快照分类、页内执行器（单次点击、不合成 Enter、过期与遮挡守卫）以及 agent 循环（过期重试、死锁检测、文本值缓存、单步执行、预算）。单元测试不会调用任何付费 API。
+点工具栏图标，输入目标，按 **Run**。**Step** 只执行一步，方便逐步观察决策；**Stop** 中止。页面上会给模型能看到的元素画编号徽章，底部有一条状态栏显示当前动作和延迟。
+
+运行会在以下情况停止：模型给出 `DONE` 或 `BLOCKED`、连续三个动作都没有改变页面、步数预算用完、任何渠道报错。`DONE` 是模型的判断，不是证明，请自己看一眼页面。
+
+## 能处理和不能处理的
+
+能处理：链接、按钮、文本输入框、textarea、contenteditable、原生 `<select>`、真正渲染出来的复选框和单选框、ARIA 角色（`button`、`link`、`combobox`、`option`、`tab`、`menuitem` 等）、自动补全列表、页内和跨页导航、滚动。
+
+不能处理：shadow root 和 iframe 里的元素、canvas 界面、文件上传、拖拽、纯键盘控件，以及通过 label 做样式、本身被隐藏的原生复选框和单选框（模型看不到它们）。密码框永远不观察也不填写。`chrome://` 内部页面会被拒绝。
+
+策略和边界与参考实现一致；在两个网站上跑通不代表普遍可靠。
+
+## 开发
 
 ```bash
-# 类型检查 + 单元测试 + 生产构建
-npm run check
-
-# 运行所有 Vitest 单元测试
-npm test
-
-# （可选）运行端到端网络真实链路测试
-export OPENROUTER_API_KEY="your-openrouter-key"
-npx tsx scripts/test_live_e2e.ts
+npm run check      # 类型检查 + 单元测试 + 生产构建
+npm test           # vitest
+npm run typecheck
 ```
 
----
+测试覆盖动作空间与答案校验、渠道适配器与重试策略、文本助手解析、DOM 快照分类、页内执行器（jsdom）和 agent 循环（mock `chrome`），不会调用任何付费 API。设置 `OPENROUTER_API_KEY` 后 `scripts/test_live_e2e.ts` 会发两个真实请求。
 
-## 📄 开源协议
+```
+src/
+  background/agent.ts        观察 → 决策 → 执行 循环，预算，死锁检测
+  background/index.ts        消息路由，设置存储
+  content/snapshot.ts        DOM 观察，节点身份缓存，新鲜度守卫
+  content/executor.ts        防过期的 click / fill / select / scroll
+  content/overlay.ts         徽章和状态栏
+  shared/action-space.ts     元素表，Jev 问题，严格答案校验
+  shared/text-helper.ts      TYPE_TEXT 取值
+  shared/providers/          TypeSafe、OpenRouter、Cloudflare 适配器
+  popup/, options/           React 界面
+public/manifest.json         MV3 manifest（构建时复制到 dist/）
+```
 
-基于 MIT License 开源，详情参阅 [LICENSE](LICENSE)。
+## 关键词
+
+浏览器智能体, 网页自动化, 浏览器自动化, Chrome 扩展, Manifest V3, TypeSafe Jev, jev-1.13, 系统一模型, 非自回归, 决策模型, OpenRouter Decisions API, Cloudflare Workers AI, browser-use, jev-ultrafast, DOM 自动化, AI agent, browser agent, web agent, TypeScript, React, Vite
+
+## 许可
+
+MIT

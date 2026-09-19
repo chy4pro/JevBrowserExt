@@ -1,7 +1,7 @@
 {
   "name": "jevbrowserext",
   "version": "1.1.0",
-  "description": "Jev Ultrafast System 1 Browser Agent Extension",
+  "description": "Chrome extension that drives web pages with TypeSafe Jev, a decision model that picks the next click, keystroke or dropdown value in a few hundred milliseconds. MV3 port of browser-use/jev-ultrafast.",
   "scripts": {
     "build": "vite build",
     "dev": "vite",
@@ -11,10 +11,21 @@
     "check": "npm run typecheck && npm test && npm run build"
   },
   "keywords": [
-    "jev",
-    "typesafe",
     "browser-agent",
-    "extension"
+    "web-agent",
+    "browser-automation",
+    "chrome-extension",
+    "manifest-v3",
+    "typesafe",
+    "jev",
+    "openrouter",
+    "cloudflare-workers-ai",
+    "browser-use",
+    "ai-agent",
+    "dom-automation",
+    "typescript",
+    "react",
+    "vite"
   ],
   "author": "",
   "license": "MIT",
@@ -33,5 +44,10 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "vitest": "^5.0.1"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chy4pro/JevBrowserExt.git"
+  },
+  "homepage": "https://github.com/chy4pro/JevBrowserExt#readme"
 }
