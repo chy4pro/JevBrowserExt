@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.2 — 2026-09-19
+- New icon (assets/icon.svg, rendered by scripts/render-icons.mjs at 16/32/48/128) and a 440×280 promo tile for the store listing.
+
 ## 1.4.1 — 2026-09-19
 - Manifest description shortened to the Chrome Web Store limit; privacy policy and store listing material added under docs/.
 

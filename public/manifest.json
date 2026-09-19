@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jev for Chrome",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Drives the current tab with TypeSafe Jev, a sub-second decision model. Unofficial community port of jev-ultrafast.",
   "permissions": [
     "storage",
@@ -16,12 +16,14 @@
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icon16.png",
+      "32": "icon32.png",
       "48": "icon48.png",
       "128": "icon128.png"
     }
   },
   "icons": {
     "16": "icon16.png",
+    "32": "icon32.png",
     "48": "icon48.png",
     "128": "icon128.png"
   },
