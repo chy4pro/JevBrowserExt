@@ -119,5 +119,13 @@
     "goal": "Open the technology section",
     "maxSteps": 6,
     "expectUrl": "bbc\\.com/(innovation|technology|news/technology)"
+  },
+  {
+    "name": "Fixture: link that opens a new tab",
+    "url": "fixture://new-tab.html",
+    "goal": "Open the documentation page",
+    "maxSteps": 4,
+    "expectUrl": "docs\\\\.html",
+    "expectText": "Getting started"
   }
 ]

@@ -90,7 +90,7 @@ Runs stop on `DONE`, on `BLOCKED`, after three consecutive actions that changed 
 
 ## What is and isn't handled
 
-Works: links, buttons, text inputs, textareas, contenteditable, native `<select>`, checkboxes and radios that are actually rendered, ARIA roles (`button`, `link`, `combobox`, `option`, `tab`, `menuitem`, ...), autocomplete lists, in-page and cross-page navigation, scrolling.
+Works: links, buttons, text inputs, textareas, contenteditable, native `<select>`, checkboxes and radios that are actually rendered, ARIA roles (`button`, `link`, `combobox`, `option`, `tab`, `menuitem`, ...), autocomplete lists, in-page and cross-page navigation, scrolling, and links that open a new tab: the agent follows the tab its click opened, continues there, and returns to the opener if that tab is closed.
 
 Not handled: elements inside shadow roots or iframes, canvas UIs, file uploads, drag and drop, keyboard-only widgets, and natively hidden checkboxes/radios styled through their label (the model cannot see them). Password fields are never observed or filled. Internal `chrome://` pages are refused. Hover-only layers inside a product card are clicked through; anything under a dialog or page-wide overlay is not.
 

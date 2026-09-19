@@ -14,6 +14,7 @@
  * Env: E2E_OUT (default .e2e-out), E2E_MAX_STEPS, CHROMIUM_PATH.
  */
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium, type BrowserContext, type Page, type Worker } from 'playwright';
@@ -39,6 +40,25 @@ interface Result {
 }
 
 const DIST = path.resolve('dist');
+const FIXTURES = path.resolve('scripts/e2e-fixtures');
+
+/** Serves scripts/e2e-fixtures over loopback for deterministic pages (fixture://name.html). */
+let fixtureServer: { url: string; close: () => void } | null = null;
+async function fixtureBase(): Promise<string> {
+  if (fixtureServer) return fixtureServer.url;
+  const server = http.createServer((req, res) => {
+    const name = path.basename(new URL(req.url || '/', 'http://x').pathname) || 'index.html';
+    const file = path.join(FIXTURES, name);
+    if (!file.startsWith(FIXTURES) || !fs.existsSync(file)) { res.writeHead(404); res.end('not found'); return; }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(fs.readFileSync(file));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  fixtureServer = { url: `http://127.0.0.1:${port}/`, close: () => server.close() };
+  return fixtureServer.url;
+}
+const resolveTaskUrl = async (url: string) => (url.startsWith('fixture://') ? `${await fixtureBase()}${url.slice('fixture://'.length)}` : url);
 const OUT = path.resolve(process.env.E2E_OUT || '.e2e-out');
 const API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
 const DEFAULT_MAX_STEPS = Number(process.env.E2E_MAX_STEPS || 8);
@@ -109,12 +129,13 @@ async function runTask(context: BrowserContext, sw: Worker, extId: string, task:
       await chrome.storage.local.set({ jev_settings: { ...(jev_settings || {}), maxSteps } });
     }, maxSteps);
 
+    const startUrl = await resolveTaskUrl(task.url);
     page = await context.newPage();
     attachPageLogging(page, log);
-    await page.goto(task.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     const tabId = await sw.evaluate(
       async (url) => (await chrome.tabs.query({})).find((t) => (t.url || '').startsWith(url.split('#')[0]))?.id,
-      task.url
+      startUrl
     );
     if (typeof tabId !== 'number') throw new Error('could not find the web tab id');
     log.add(`[${task.name}] ${task.url}`);
@@ -150,15 +171,18 @@ async function runTask(context: BrowserContext, sw: Worker, extId: string, task:
     }
     const seconds = Math.round((Date.now() - started) / 100) / 10;
     await sleep(500);
-    const finalUrl = page.url();
+    // The agent may have followed a link into a new tab; judge the tab it ended on.
+    const activeUrl: string | undefined = await sw.evaluate(async () => (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.url).catch(() => undefined);
+    const finalPage = (activeUrl && context.pages().find((p) => p.url() === activeUrl)) || page;
+    const finalUrl = finalPage.url();
     let verified: boolean | null = null;
     if (task.expectUrl || task.expectText) {
-      const text = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
+      const text = await finalPage.evaluate(() => document.body?.innerText || '').catch(() => '');
       const urlOk = task.expectUrl ? new RegExp(task.expectUrl, 'i').test(finalUrl) : true;
       const textOk = task.expectText ? new RegExp(task.expectText, 'i').test(text) : true;
       verified = urlOk && textOk;
     }
-    await page.screenshot({ path: path.join(dir, 'final-page.png') }).catch(() => undefined);
+    await finalPage.screenshot({ path: path.join(dir, 'final-page.png') }).catch(() => undefined);
     await popup.screenshot({ path: path.join(dir, 'final-popup.png') }).catch(() => undefined);
     result = {
       task,
@@ -178,7 +202,9 @@ async function runTask(context: BrowserContext, sw: Worker, extId: string, task:
   } finally {
     log.save(path.join(dir, 'run.log'));
     await popup?.close().catch(() => undefined);
-    await page?.close().catch(() => undefined);
+    for (const p of context.pages()) {
+      if (!p.url().startsWith('chrome-extension://')) await p.close().catch(() => undefined);
+    }
   }
   return result;
 }
@@ -259,6 +285,7 @@ async function main() {
   } finally {
     log.save(path.join(OUT, 'run.log'));
     await context.close();
+    fixtureServer?.close();
   }
   process.exit(failed ? 1 : 0);
 }

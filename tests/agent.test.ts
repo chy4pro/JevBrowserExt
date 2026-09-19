@@ -57,7 +57,12 @@ interface Page {
   sent: Array<{ type: string; [k: string]: any }>;
 }
 
+const created: Array<(tab: any) => void> = [];
+const removed: Array<(tabId: number) => void> = [];
+
 function installChrome(page: Page) {
+  created.length = 0;
+  removed.length = 0;
   const chromeMock = {
     tabs: {
       get: vi.fn(async () => ({ id: 7, url: 'https://example.com/', status: 'complete' })),
@@ -75,6 +80,9 @@ function installChrome(page: Page) {
         }
       }),
       onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
+      onCreated: { addListener: vi.fn((fn: any) => { created.push(fn); }) },
+      onRemoved: { addListener: vi.fn((fn: any) => { removed.push(fn); }) },
+      update: vi.fn(async () => ({})),
       query: vi.fn(),
     },
     scripting: { executeScript: vi.fn() },
@@ -499,5 +507,59 @@ describe('navigation started by an action', () => {
     expect(listener).not.toBeNull();
     expect(jev.mock.calls[1][1].state.page.url).toBe('https://example.com/sorted');
     expect(jev.mock.calls[1][1].state.recent_actions[0].outcome).toBe('navigated to https://example.com/sorted');
+  });
+});
+
+describe('links that open a new tab', () => {
+  beforeEach(() => {
+    jev.mockReset();
+    textHelper.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('follows a tab opened by the click, observes there, and returns when it closes', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: true }), sent: [] };
+    const chromeMock = installChrome(page);
+    const observedTabs: number[] = [];
+    chromeMock.tabs.sendMessage.mockImplementation(async (tabId: number, msg: any) => {
+      page.sent.push(msg);
+      if (msg.type === 'CONTENT_OBSERVE') {
+        observedTabs.push(tabId);
+        return { success: true, snapshot: tabId === 8 ? snapshot({ url: 'https://example.com/docs', title: 'Docs' }) : page.snapshot };
+      }
+      if (msg.type === 'CONTENT_ACT') {
+        // The click opens a new tab; Chrome reports it with the opener id.
+        created.forEach((fn) => fn({ id: 8, openerTabId: 7 }));
+        return { success: true };
+      }
+      return { pong: true };
+    });
+    jev.mockResolvedValueOnce(answer('CLICK', clickTarget('1'))).mockResolvedValueOnce(answer('DONE'));
+    const r = runner();
+    await r.start('Open the documentation', 7);
+
+    expect(observedTabs).toEqual([7, 8]);
+    expect(chromeMock.tabs.update).toHaveBeenCalledWith(8, { active: true });
+    const second = jev.mock.calls[1][1].state;
+    expect(second.page.url).toBe('https://example.com/docs');
+    expect(second.recent_actions[0].outcome).toBe('opened a new tab and switched to it: https://example.com/docs');
+    expect(r.getProgress().status).toBe('done');
+  });
+
+  it('ignores tabs opened by other tabs or outside a run', async () => {
+    const page: Page = { snapshot: snapshot(), act: () => ({ success: true }), sent: [] };
+    const chromeMock = installChrome(page);
+    const observedTabs: number[] = [];
+    chromeMock.tabs.sendMessage.mockImplementation(async (tabId: number, msg: any) => {
+      page.sent.push(msg);
+      if (msg.type === 'CONTENT_OBSERVE') { observedTabs.push(tabId); return { success: true, snapshot: page.snapshot }; }
+      if (msg.type === 'CONTENT_ACT') { created.forEach((fn) => fn({ id: 9, openerTabId: 99 })); return { success: true }; }
+      return { pong: true };
+    });
+    jev.mockResolvedValueOnce(answer('CLICK', clickTarget('1'))).mockResolvedValueOnce(answer('DONE'));
+    const r = runner();
+    await r.start('Stay here', 7);
+    expect(observedTabs).toEqual([7, 7]);
+    expect(chromeMock.tabs.update).not.toHaveBeenCalled();
   });
 });

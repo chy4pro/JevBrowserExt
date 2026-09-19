@@ -96,6 +96,48 @@ export class AgentRunner {
 
   private lastFingerprint: string | null = null;
   private lastSummary: PageSummary | null = null;
+  /** Tabs the run came from, most recent last, so a closed follow-up tab returns to its opener. */
+  private tabStack: number[] = [];
+  private pendingTab: { from: number; to: number; closed: boolean } | null = null;
+  private tabNote: string | null = null;
+
+  constructor() {
+    // A click may open a new tab (target=_blank, window.open). Like a person, the agent
+    // follows it; when that tab closes it returns to the tab that opened it.
+    try {
+      chrome.tabs.onCreated.addListener((tab) => this.onTabCreated(tab));
+      chrome.tabs.onRemoved.addListener((tabId) => this.onTabRemoved(tabId));
+    } catch {
+      // Not running inside an extension (unit tests without tab events)
+    }
+  }
+
+  private onTabCreated(tab: chrome.tabs.Tab): void {
+    if (this.progress.status !== 'running' || tab.id === undefined) return;
+    if (this.activeTabId === null || tab.openerTabId !== this.activeTabId) return;
+    this.tabStack.push(this.activeTabId);
+    this.pendingTab = { from: this.activeTabId, to: tab.id, closed: false };
+    this.activeTabId = tab.id;
+  }
+
+  private onTabRemoved(tabId: number): void {
+    if (tabId !== this.activeTabId || this.tabStack.length === 0) return;
+    const back = this.tabStack.pop()!;
+    this.pendingTab = { from: tabId, to: back, closed: true };
+    this.activeTabId = back;
+  }
+
+  /** Brings a newly opened (or restored) tab to the front and waits for it before observing. */
+  private async followTab(): Promise<void> {
+    const pending = this.pendingTab;
+    if (!pending) return;
+    this.pendingTab = null;
+    this.lastFingerprint = null; // a different document: the previous action's outcome is "opened a tab"
+    this.tabNote = pending.closed ? 'the tab closed; back on the previous tab' : 'opened a new tab and switched to it';
+    await chrome.tabs.update(pending.to, { active: true }).catch(() => undefined);
+    await this.waitForTabToLoad(pending.to);
+    this.sendStatus({ text: this.tabNote });
+  }
   private startUrl = '';
   private visitedUrls: string[] = [];
   private consecutiveStale = 0;
@@ -127,6 +169,9 @@ export class AgentRunner {
     this.history = [];
     this.lastFingerprint = null;
     this.lastSummary = null;
+    this.tabStack = [];
+    this.pendingTab = null;
+    this.tabNote = null;
     this.startUrl = '';
     this.visitedUrls = [];
     this.consecutiveStale = 0;
@@ -275,6 +320,7 @@ export class AgentRunner {
    * A stale decision is discarded and the page is observed again without recording a step.
    */
   private async executeOneStep(token: number): Promise<boolean> {
+    await this.followTab();
     const tabId = this.activeTabId;
     if (tabId === null) {
       this.finish('error', 'No active tab identified');
@@ -302,7 +348,12 @@ export class AgentRunner {
     if (!this.startUrl) this.startUrl = snapshot.url;
     if (this.visitedUrls[this.visitedUrls.length - 1] !== snapshot.url) this.visitedUrls.push(snapshot.url);
     const last = this.history[this.history.length - 1];
-    if (last && last.page_changed === undefined && this.lastSummary) {
+    if (last && last.page_changed === undefined && this.tabNote) {
+      last.outcome = `${this.tabNote}: ${snapshot.url}`;
+      last.url = snapshot.url;
+      last.page_changed = true;
+      this.tabNote = null;
+    } else if (last && last.page_changed === undefined && this.lastSummary) {
       last.outcome = describeOutcome(this.lastSummary, summary);
       last.url = snapshot.url;
       last.page_changed = fingerprint !== this.lastFingerprint;
@@ -567,7 +618,9 @@ export class AgentRunner {
     // A click, select or Enter may have started a navigation that only shows up as the tab
     // loading; observing the old document now would hand the model a page that is about to
     // disappear.
-    if (navigated) {
+    if (this.pendingTab) {
+      await this.followTab();
+    } else if (navigated) {
       await this.waitForTabToLoad(tabId);
     } else {
       const tab = await chrome.tabs.get(tabId).catch(() => null);

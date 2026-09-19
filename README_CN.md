@@ -90,7 +90,7 @@ npm run build
 
 ## 能处理和不能处理的
 
-能处理：链接、按钮、文本输入框、textarea、contenteditable、原生 `<select>`、真正渲染出来的复选框和单选框、ARIA 角色（`button`、`link`、`combobox`、`option`、`tab`、`menuitem` 等）、自动补全列表、页内和跨页导航、滚动。
+能处理：链接、按钮、文本输入框、textarea、contenteditable、原生 `<select>`、真正渲染出来的复选框和单选框、ARIA 角色（`button`、`link`、`combobox`、`option`、`tab`、`menuitem` 等）、自动补全列表、页内和跨页导航、滚动，以及会打开新标签页的链接：agent 会跟进自己点开的新标签页继续执行，该标签页被关闭时退回原来的标签页。
 
 不能处理：shadow root 和 iframe 里的元素、canvas 界面、文件上传、拖拽、纯键盘控件，以及通过 label 做样式、本身被隐藏的原生复选框和单选框（模型看不到它们）。密码框永远不观察也不填写。`chrome://` 内部页面会被拒绝。商品卡片内部悬停才出现的浮层会被穿透点击；对话框或整页遮罩下面的元素不会。
 
