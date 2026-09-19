@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Jev for Chrome",
-  "version": "1.4.0",
-  "description": "Drives the current tab with TypeSafe Jev, a decision model that picks each click, keystroke or dropdown value in a few hundred milliseconds. Community port of jev-ultrafast; not affiliated with TypeSafe.",
+  "version": "1.4.1",
+  "description": "Drives the current tab with TypeSafe Jev, a sub-second decision model. Unofficial community port of jev-ultrafast.",
   "permissions": [
     "storage",
     "activeTab",

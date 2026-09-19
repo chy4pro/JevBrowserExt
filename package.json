@@ -1,6 +1,6 @@
 {
   "name": "jev-for-chrome",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Chrome extension that drives the current tab with TypeSafe Jev, a decision model that picks each click, keystroke or dropdown value in a few hundred milliseconds. Community port of browser-use/jev-ultrafast; not affiliated with TypeSafe.",
   "scripts": {
     "build": "vite build",

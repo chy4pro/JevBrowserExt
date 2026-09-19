@@ -119,6 +119,8 @@ Runs stop on `DONE`, on `BLOCKED`, after three consecutive actions that changed 
 
 ## What leaves your browser
 
+The full statement is in [docs/PRIVACY.md](docs/PRIVACY.md).
+
 Each step sends one request to the Jev provider you chose (OpenRouter, TypeSafe or Cloudflare) containing: your goal, the current tab's URL, title and visible text (up to 6,000 characters), the table of interactive elements with their labels, current values and link targets, and the last ten actions. When the model decides to type, one request goes to the text model with the goal, the field and the same page text. Nothing is sent anywhere else; there is no telemetry. API keys stay in `chrome.storage.local` on your machine. Password fields are never read or filled, and `chrome://` pages are refused. The `<all_urls>` permission exists because the extension has to read the tab you point it at; it does nothing on tabs where you have not started a run.
 
 ## What is and isn't handled

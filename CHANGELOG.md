@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.1 — 2026-09-19
+- Manifest description shortened to the Chrome Web Store limit; privacy policy and store listing material added under docs/.
+
 ## 1.4.0 — 2026-09-19
 - Renamed to Jev for Chrome (repository chy4pro/jev-for-chrome; the old URL redirects). Extension name, popup and options titles, package name and release archive name follow.
 - Community project, not affiliated with TypeSafe or Browser Use; stated in the manifest description and README.
