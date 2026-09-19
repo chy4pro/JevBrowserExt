@@ -26,7 +26,7 @@ Not affiliated with TypeSafe or Browser Use.
 
 **Screenshots** (1280×800): `docs/store/1-typing.png`, `docs/store/2-results.png`, `docs/store/3-options.png`
 
-**Small promo tile** (440×280, optional but fills the listing): 
+**Small promo tile** (440×280, optional but fills the listing): `docs/store/promo-440x280.png` 
 
 **Privacy policy URL**: https://github.com/chy4pro/jev-for-chrome/blob/main/docs/PRIVACY.md
 
