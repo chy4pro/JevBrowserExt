@@ -16,6 +16,13 @@ const STATUS_COLORS: Record<string, string> = {
   idle: '#9ca3af',
 };
 
+/** Optional ?tabId= lets the popup drive a specific tab when it is opened as a page (tests, detached use). */
+function targetTabId(): number | undefined {
+  const raw = new URLSearchParams(window.location.search).get('tabId');
+  const id = raw ? Number(raw) : NaN;
+  return Number.isInteger(id) ? id : undefined;
+}
+
 export const Popup: React.FC = () => {
   const [goal, setGoal] = useState('');
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -59,12 +66,12 @@ export const Popup: React.FC = () => {
 
   const handleStart = () => {
     if (!goal.trim()) return;
-    chrome.runtime.sendMessage({ type: 'START_AGENT', goal: goal.trim() });
+    chrome.runtime.sendMessage({ type: 'START_AGENT', goal: goal.trim(), tabId: targetTabId() });
   };
 
   const handleStep = () => {
     if (!goal.trim()) return;
-    chrome.runtime.sendMessage({ type: 'STEP_AGENT', goal: goal.trim() });
+    chrome.runtime.sendMessage({ type: 'STEP_AGENT', goal: goal.trim(), tabId: targetTabId() });
   };
 
   const handleStop = () => {
@@ -74,7 +81,7 @@ export const Popup: React.FC = () => {
   const handleToggleOverlay = () => {
     const nextVal = !showBadges;
     setShowBadges(nextVal);
-    chrome.runtime.sendMessage({ type: 'TOGGLE_OVERLAY', show: nextVal });
+    chrome.runtime.sendMessage({ type: 'TOGGLE_OVERLAY', show: nextVal, tabId: targetTabId() });
   };
 
   const openOptions = () => {

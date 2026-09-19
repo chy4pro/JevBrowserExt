@@ -284,13 +284,13 @@ export type ExtensionMessage =
   | { type: 'GET_SETTINGS' }
   | { type: 'SETTINGS_RESPONSE'; settings: AppSettings }
   | { type: 'SAVE_SETTINGS'; settings: AppSettings }
-  | { type: 'START_AGENT'; goal: string }
+  | { type: 'START_AGENT'; goal: string; tabId?: number }
   | { type: 'STOP_AGENT' }
-  | { type: 'STEP_AGENT'; goal: string }
+  | { type: 'STEP_AGENT'; goal: string; tabId?: number }
   | { type: 'GET_PROGRESS' }
   | { type: 'PROGRESS_UPDATE'; progress: AgentProgress }
   | { type: 'PING' }
   | { type: 'CONTENT_OBSERVE' }
   | { type: 'CONTENT_ACT'; action: PageAction; text?: string }
   | { type: 'CONTENT_STATUS'; text?: string; latencyMs?: number; clear?: boolean }
-  | { type: 'TOGGLE_OVERLAY'; show: boolean };
+  | { type: 'TOGGLE_OVERLAY'; show: boolean; tabId?: number };

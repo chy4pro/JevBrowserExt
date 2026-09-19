@@ -11,11 +11,23 @@ import { takeSnapshot } from './snapshot';
 
 /**
  * The manifest injects this script at document_idle and the background may inject it
- * earlier on demand. Both land in the same isolated world, so a window flag guarantees a
- * single listener: two listeners would execute every action twice.
+ * earlier on demand. Both land in the same isolated world, so a window marker guarantees a
+ * single live listener: two listeners would execute every action twice. A marker left by a
+ * previous extension instance (after "Reload" on chrome://extensions) is ignored because
+ * that instance can no longer receive messages.
  */
-if (!window.__jevContentLoaded) {
-  window.__jevContentLoaded = true;
+const previous = window.__jevContent;
+if (!previous || !previous.alive()) {
+  window.__jevContent = {
+    alive: () => {
+      try {
+        // After the extension is reloaded the old context's runtime id becomes undefined.
+        return typeof chrome.runtime?.id === 'string';
+      } catch {
+        return false;
+      }
+    },
+  };
   boot();
 }
 

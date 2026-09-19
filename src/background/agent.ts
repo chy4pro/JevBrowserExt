@@ -18,14 +18,17 @@ export function computePageFingerprint(snapshot: PageSnapshot): string {
   return JSON.stringify([snapshot.url, Math.round(snapshot.scroll.y), snapshot.text, semantics]);
 }
 
-/** Errors from a tab that navigated away while a message was in flight. */
-function isNavigationError(message: string): boolean {
+/**
+ * Errors Chrome raises when the page navigated (or its document was replaced) while a message
+ * was in flight. The action itself ran; only the reply was lost.
+ */
+export function isNavigationError(message: string): boolean {
   return (
-    message.includes('back/forward cache') ||
-    message.includes('message channel is closed') ||
-    message.includes('message port closed') ||
-    message.includes('Receiving end does not exist') ||
-    message.includes('Frame was removed')
+    /back\/forward cache/i.test(message) ||
+    /message (channel|port) (is |was )?closed/i.test(message) ||
+    /Receiving end does not exist/i.test(message) ||
+    /Frame was removed/i.test(message) ||
+    /Extension context invalidated/i.test(message)
   );
 }
 
@@ -167,6 +170,15 @@ export class AgentRunner {
     await new Promise((r) => setTimeout(r, 150));
   }
 
+  private async ping(tabId: number): Promise<boolean> {
+    try {
+      const res = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+      return !!res?.pong;
+    } catch {
+      return false;
+    }
+  }
+
   /** Makes sure a single content script instance is listening in the tab. */
   private async ensureContentScriptReady(tabId: number): Promise<void> {
     const tab = await chrome.tabs.get(tabId);
@@ -176,15 +188,19 @@ export class AgentRunner {
         `Cannot run on internal browser page (${url}). Open a regular web page and try again.`
       );
     }
-    if (tab.status === 'loading') {
-      await this.waitForTabToLoad(tabId);
+    // Inject as soon as a document exists instead of waiting for the load event: the script
+    // guards against double registration, so a later manifest injection is harmless.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (await this.ping(tabId)) return;
+      try {
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      } catch {
+        // Document not ready or being replaced; retry below.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
     }
-    try {
-      await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-    } catch {
-      // The content script guards against double registration, so injecting is safe.
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    if (!(await this.ping(tabId))) {
+      throw new Error('Content script did not respond after injection. Reload the page and try again.');
     }
   }
 

@@ -246,3 +246,18 @@ describe('AgentRunner', () => {
     expect(jev).not.toHaveBeenCalled();
   });
 });
+
+describe('isNavigationError', () => {
+  it('recognises every wording Chrome uses when the page navigated mid-message', async () => {
+    const { isNavigationError } = await import('../src/background/agent');
+    for (const m of [
+      'A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received',
+      'The message port closed before a response was received.',
+      'Could not establish connection. Receiving end does not exist.',
+      'The page keeping the extension port is moved into back/forward cache, so the message channel is closed.',
+      'Frame was removed.',
+      'Extension context invalidated.',
+    ]) expect(isNavigationError(m), m).toBe(true);
+    expect(isNavigationError('Target element is not a <select> element')).toBe(false);
+  });
+});

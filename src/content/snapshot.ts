@@ -17,7 +17,7 @@ interface JevCache {
 declare global {
   interface Window {
     __jevFast?: JevCache;
-    __jevContentLoaded?: boolean;
+    __jevContent?: { alive: () => boolean };
   }
 }
 

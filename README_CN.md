@@ -75,7 +75,19 @@ npm test           # vitest
 npm run typecheck
 ```
 
-测试覆盖动作空间与答案校验、渠道适配器与重试策略、文本助手解析、DOM 快照分类、页内执行器（jsdom）和 agent 循环（mock `chrome`），不会调用任何付费 API。设置 `OPENROUTER_API_KEY` 后 `scripts/test_live_e2e.ts` 会发两个真实请求。
+测试覆盖动作空间与答案校验、渠道适配器与重试策略、文本助手解析、DOM 快照分类、内容脚本启动守卫、页内执行器（jsdom）和 agent 循环（mock `chrome`），不会调用任何付费 API。设置 `OPENROUTER_API_KEY` 后 `scripts/test_live_e2e.ts` 会发两个真实请求。
+
+### 在真实浏览器里跑构建好的扩展
+
+```bash
+npx playwright install chromium          # 一次即可
+npm run e2e:ext                          # 冒烟：全部启动，期望得到清晰的缺 key 错误
+OPENROUTER_API_KEY=... npm run e2e:ext   # 完整运行，真实决策
+```
+
+脚本把 `dist/` 加载进 Playwright 的 Chromium（新版 headless，不需要显示器），把设置写入 `chrome.storage`，打开选项页、popup 和一个真实网页，通过真实的 service worker 和内容脚本跑完目标，并把 `run.log` 和每步截图写到 `.e2e-out/`。可用变量：`E2E_URL`、`E2E_GOAL`、`E2E_MAX_STEPS`、`E2E_OUT`、`CHROMIUM_PATH`。popup 支持 `?tabId=`，测试（或分离窗口）可以指定目标标签页。
+
+没有 root 的机器上，可用 `apt-get download` 拿到 Chromium 缺的共享库、`dpkg -x` 解包，然后把 `LD_LIBRARY_PATH` 和 `FONTCONFIG_FILE` 指过去；本项目开发所在的容器就是这么跑的。
 
 ```
 src/

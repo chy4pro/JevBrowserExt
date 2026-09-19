@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jev Ultrafast Agent",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "System 1 Non-autoregressive Browser Agent driven by TypeSafe Jev",
   "permissions": [
     "storage",
@@ -38,7 +38,7 @@
       "js": [
         "content.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_end"
     }
   ]
 }

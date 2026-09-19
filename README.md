@@ -75,7 +75,19 @@ npm test           # vitest
 npm run typecheck
 ```
 
-Tests cover the action space and answer validation, provider adapters and retry policy, the text helper parser, DOM snapshot classification, the in-page executor (jsdom) and the agent loop (mocked `chrome`). They never call a paid API. `scripts/test_live_e2e.ts` runs two real requests when `OPENROUTER_API_KEY` is set.
+Tests cover the action space and answer validation, provider adapters and retry policy, the text helper parser, DOM snapshot classification, the content script boot guard, the in-page executor (jsdom) and the agent loop (mocked `chrome`). They never call a paid API. `scripts/test_live_e2e.ts` runs two real requests when `OPENROUTER_API_KEY` is set.
+
+### Running the built extension in a real browser
+
+```bash
+npx playwright install chromium          # once
+npm run e2e:ext                          # smoke: boots everything, expects a clear missing-key error
+OPENROUTER_API_KEY=... npm run e2e:ext   # full run with real decisions
+```
+
+The script loads `dist/` into Playwright's Chromium (new headless, no display needed), writes settings into `chrome.storage`, opens the options page, the popup and a real web page, runs the goal through the real service worker and content script, and writes `run.log` plus screenshots per step to `.e2e-out/`. Variables: `E2E_URL`, `E2E_GOAL`, `E2E_MAX_STEPS`, `E2E_OUT`, `CHROMIUM_PATH`. The popup accepts `?tabId=` so a test (or a detached window) can target a specific tab.
+
+On a machine without root, fetch Chromium's missing shared libraries with `apt-get download`, extract them with `dpkg -x` and point `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` at the result; that is how the container this was developed in runs it.
 
 ```
 src/

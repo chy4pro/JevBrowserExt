@@ -23,7 +23,13 @@ async function refreshRunnerSettings(): Promise<AppSettings> {
 
 refreshRunnerSettings().catch(() => undefined);
 
-async function getActiveTabId(): Promise<number> {
+/** The tab to act on: an explicit id (detached popup, tests) or the active tab of the current window. */
+async function resolveTabId(explicit?: number): Promise<number> {
+  if (typeof explicit === 'number') {
+    const tab = await chrome.tabs.get(explicit);
+    if (tab.id === undefined) throw new Error(`Tab ${explicit} not found`);
+    return tab.id;
+  }
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const activeTab = tabs[0];
   if (!activeTab || activeTab.id === undefined) {
@@ -54,7 +60,7 @@ chrome.runtime.onMessage.addListener(
             const goal = (message.goal || '').trim();
             if (!goal) throw new Error('Goal is empty');
             await refreshRunnerSettings();
-            const tabId = await getActiveTabId();
+            const tabId = await resolveTabId(message.tabId);
             void runner.start(goal, tabId); // runs in the background; progress arrives via PROGRESS_UPDATE
             sendResponse({ success: true });
             return;
@@ -63,7 +69,7 @@ chrome.runtime.onMessage.addListener(
             const goal = (message.goal || runner.getProgress().goal || '').trim();
             if (!goal) throw new Error('Goal is empty');
             await refreshRunnerSettings();
-            const tabId = await getActiveTabId();
+            const tabId = await resolveTabId(message.tabId);
             void runner.step(goal, tabId);
             sendResponse({ success: true });
             return;
@@ -76,7 +82,7 @@ chrome.runtime.onMessage.addListener(
           case 'TOGGLE_OVERLAY': {
             const settings = await getStoredSettings();
             await saveStoredSettings({ ...settings, showOverlay: message.show });
-            const tabId = await getActiveTabId();
+            const tabId = await resolveTabId(message.tabId);
             await chrome.tabs.sendMessage(tabId, message).catch(() => undefined);
             sendResponse({ success: true });
             return;
