@@ -1,16 +1,17 @@
 import { AppSettings, JevRequest, JevResponse } from '../types';
 import { callCloudflare } from './cloudflare';
-import { callOpenRouter, normalizeOpenRouterModel } from './openrouter';
+import { callOpenRouter } from './openrouter';
 import { callTypeSafe } from './typesafe';
 
+/** The configured model id. Settings are migrated on load, so this is what the provider sends. */
 export function activeJevModel(settings: AppSettings): string {
   switch (settings.activeProvider) {
     case 'typesafe':
-      return settings.typesafe.model || 'jev-latest';
+      return settings.typesafe.model;
     case 'openrouter':
-      return normalizeOpenRouterModel(settings.openrouter.model);
+      return settings.openrouter.model;
     case 'cloudflare':
-      return settings.cloudflare.model || 'typesafe/jev';
+      return settings.cloudflare.model;
     default:
       return '';
   }
@@ -32,5 +33,5 @@ export async function callJevProvider(
   }
 }
 
-export { callCloudflare, callOpenRouter, callTypeSafe, normalizeOpenRouterModel };
+export { callCloudflare, callOpenRouter, callTypeSafe };
 export { postJson } from './http';
