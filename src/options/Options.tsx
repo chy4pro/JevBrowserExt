@@ -196,6 +196,7 @@ export const Options: React.FC = () => {
                 <input
                   type="text"
                   style={styles.input}
+                  placeholder="typesafe/jev-1.13"
                   value={settings.openrouter.model}
                   onChange={(e) =>
                     setSettings({
@@ -204,6 +205,9 @@ export const Options: React.FC = () => {
                     })
                   }
                 />
+                <small style={{ color: '#6b7280', fontSize: '11px', marginTop: '4px', display: 'block' }}>
+                  Standard OpenRouter slug: <code>typesafe/jev-1.13</code> (Note: OpenRouter does not support <code>typesafe/jev-latest</code>)
+                </small>
               </div>
               <div style={styles.field}>
                 <label style={styles.label}>Endpoint</label>

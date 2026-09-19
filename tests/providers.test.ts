@@ -116,6 +116,26 @@ describe('Jev Provider Adapters', () => {
     expect(res.answers.operation.choice).toBe('CLICK');
   });
 
+  it('callOpenRouter automatically normalizes typesafe/jev-latest to typesafe/jev-1.13', async () => {
+    (global.fetch as any).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ model: 'typesafe/jev-1.13', answers: {} }),
+    });
+
+    const config = {
+      apiKey: 'test-openrouter-key',
+      model: 'typesafe/jev-latest',
+      endpoint: 'https://openrouter.ai/api/alpha/decisions',
+    };
+
+    await callOpenRouter(config, dummyRequest);
+
+    const [, options] = (global.fetch as any).mock.calls[0];
+    const body = JSON.parse(options.body);
+    expect(body.model).toBe('typesafe/jev-1.13');
+  });
+
   it('callCloudflare wraps payload into input and handles result envelope', async () => {
     const mockResponse = {
       success: true,

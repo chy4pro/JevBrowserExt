@@ -80,7 +80,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 /** Deep-merges stored settings over the defaults so new nested keys always exist. */
 export function mergeSettings(stored: Partial<AppSettings> | undefined | null): AppSettings {
   const s = stored || {};
-  return {
+  const merged: AppSettings = {
     ...DEFAULT_SETTINGS,
     ...s,
     typesafe: { ...DEFAULT_SETTINGS.typesafe, ...(s.typesafe || {}) },
@@ -88,6 +88,26 @@ export function mergeSettings(stored: Partial<AppSettings> | undefined | null): 
     cloudflare: { ...DEFAULT_SETTINGS.cloudflare, ...(s.cloudflare || {}) },
     textHelper: { ...DEFAULT_SETTINGS.textHelper, ...(s.textHelper || {}) },
   };
+
+  // Auto-migrate obsolete or invalid OpenRouter model IDs stored in Chrome storage
+  if (
+    !merged.openrouter.model ||
+    merged.openrouter.model === 'typesafe/jev-latest' ||
+    merged.openrouter.model === 'jev-latest'
+  ) {
+    merged.openrouter.model = 'typesafe/jev-1.13';
+  }
+
+  // Auto-migrate obsolete text helper models (404 models or ambiguous slugs)
+  if (
+    merged.textHelper.model === 'deepseek-chat' ||
+    merged.textHelper.model?.includes('1.5-8b') ||
+    !merged.textHelper.model
+  ) {
+    merged.textHelper.model = 'deepseek/deepseek-chat';
+  }
+
+  return merged;
 }
 
 // Jev Question Primitives

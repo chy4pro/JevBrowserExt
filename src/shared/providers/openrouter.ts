@@ -6,6 +6,22 @@ export const OPENROUTER_HEADERS = {
   'X-Title': 'JevBrowserExt',
 };
 
+/**
+ * Normalizes OpenRouter model slug.
+ * OpenRouter rejects 'typesafe/jev-latest' and 'jev-latest' with 400.
+ * The valid OpenRouter slug is 'typesafe/jev-1.13'.
+ */
+export function normalizeOpenRouterModel(rawModel?: string): string {
+  const m = (rawModel || '').trim();
+  if (!m || m === 'typesafe/jev-latest' || m === 'jev-latest' || m === 'latest') {
+    return 'typesafe/jev-1.13';
+  }
+  if (!m.startsWith('typesafe/')) {
+    return `typesafe/${m}`;
+  }
+  return m;
+}
+
 export async function callOpenRouter(
   config: OpenRouterConfig,
   request: JevRequest
@@ -16,7 +32,7 @@ export async function callOpenRouter(
   }
 
   const endpoint = config.endpoint || 'https://openrouter.ai/api/alpha/decisions';
-  const model = (config.model || '').trim() || 'typesafe/jev-1.13';
+  const model = normalizeOpenRouterModel(config.model);
 
   const json = await postJson(
     endpoint,
